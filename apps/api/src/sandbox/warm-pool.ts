@@ -7,6 +7,7 @@
 
 import Docker from 'dockerode';
 import { EventEmitter } from 'events';
+import { Mutex } from 'async-mutex';
 import { logger } from '../config/logger.js';
 
 const docker = new Docker();
@@ -32,13 +33,16 @@ export interface SandboxInstance {
 export class SandboxWarmPool extends EventEmitter {
   private pool: Map<string, SandboxInstance> = new Map();
   private templates: Map<string, Docker.Image> = new Map();
-  private acquireLock = new Map<string, boolean>();
+  private acquireMutex = new Mutex(); // Thread-safe replacement
+  private dockerHealthy = true;
+  private healthCheckInterval?: NodeJS.Timeout;
 
   // Pool configuration
   private readonly MIN_POOL_SIZE = 3;
-  private readonly MAX_POOL_SIZE = 10;
+  private readonly MAX_POOL_SIZE = 50; // Increased for scale
   private readonly IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
   private readonly MAX_EXECUTIONS_PER_CONTAINER = 50;
+  private readonly MAX_DISK_USAGE_MB = 5000; // 5GB per container
 
   // Network isolation
   private readonly ISOLATED_NETWORK = 'sandbox-isolated';
@@ -46,6 +50,30 @@ export class SandboxWarmPool extends EventEmitter {
   constructor() {
     super();
     this.initialize();
+    this.startDockerHealthCheck();
+  }
+
+  /**
+   * Monitor Docker daemon health
+   */
+  private startDockerHealthCheck() {
+    this.healthCheckInterval = setInterval(async () => {
+      try {
+        await docker.ping();
+        if (!this.dockerHealthy) {
+          logger.info('✅ Docker daemon recovered');
+          this.dockerHealthy = true;
+          // Re-warm pool after recovery
+          await this.warmPool();
+        }
+      } catch (error: any) {
+        if (this.dockerHealthy) {
+          logger.error('❌ Docker daemon unhealthy', { error: error.message });
+          this.dockerHealthy = false;
+          this.emit('docker:unhealthy');
+        }
+      }
+    }, 10000); // Check every 10s
   }
 
   /**
@@ -192,7 +220,7 @@ export class SandboxWarmPool extends EventEmitter {
         throw new Error(`Template ${template} not found`);
       }
 
-      // Create container with resource limits
+      // Create container with resource limits + DISK QUOTA
       const container = await docker.createContainer({
         name: id,
         Image: image.id,
@@ -207,6 +235,10 @@ export class SandboxWarmPool extends EventEmitter {
           SecurityOpt: ['no-new-privileges:true'],
           CapDrop: ['ALL'], // Drop all capabilities
           AutoRemove: false, // Manual cleanup
+          // DISK QUOTA (requires overlay2 driver with quota support)
+          StorageOpt: {
+            size: `${this.MAX_DISK_USAGE_MB}M`,
+          },
         },
         Labels: {
           'aenews.type': 'sandbox',
@@ -250,66 +282,77 @@ export class SandboxWarmPool extends EventEmitter {
   }
 
   /**
-   * Acquire a container from the pool (thread-safe)
+   * Acquire a container from the pool (THREAD-SAFE with Mutex)
    */
   async acquire(config: SandboxConfig): Promise<SandboxInstance> {
+    // Check Docker health first
+    if (!this.dockerHealthy) {
+      throw new Error('Docker daemon is unhealthy - cannot acquire container');
+    }
+
     const startTime = Date.now();
 
-    // Find and atomically lock a container
-    let instance: SandboxInstance | undefined;
-    
-    for (const inst of this.pool.values()) {
-      if (
-        inst.status === 'ready' &&
-        inst.config.template === config.template &&
-        inst.executions < this.MAX_EXECUTIONS_PER_CONTAINER &&
-        !this.acquireLock.get(inst.id)
-      ) {
-        // Atomic lock
-        this.acquireLock.set(inst.id, true);
-        instance = inst;
-        break;
-      }
-    }
+    // CRITICAL: Use Mutex to prevent race conditions
+    const release = await this.acquireMutex.acquire();
 
-    if (!instance) {
-      // Create new container if pool not full
-      if (this.pool.size < this.MAX_POOL_SIZE) {
-        instance = await this.createContainer(config);
-        this.acquireLock.set(instance.id, true);
-      } else {
-        // Wait for a container to become available
-        instance = await this.waitForAvailableContainer(config, 10000);
-        if (!instance) {
-          throw new Error('No containers available - pool saturated');
+    try {
+      // Find available container
+      let instance: SandboxInstance | undefined;
+      
+      for (const inst of this.pool.values()) {
+        if (
+          inst.status === 'ready' &&
+          inst.config.template === config.template &&
+          inst.executions < this.MAX_EXECUTIONS_PER_CONTAINER
+        ) {
+          instance = inst;
+          break;
         }
-        this.acquireLock.set(instance.id, true);
       }
+
+      if (!instance) {
+        // Create new container if pool not full
+        if (this.pool.size < this.MAX_POOL_SIZE) {
+          instance = await this.createContainer(config);
+        } else {
+          // Release lock before waiting
+          release();
+          // Wait for a container to become available
+          instance = await this.waitForAvailableContainer(config, 10000);
+          if (!instance) {
+            throw new Error('No containers available - pool saturated');
+          }
+          // Re-acquire lock
+          const newRelease = await this.acquireMutex.acquire();
+          release = newRelease as any; // Update release function
+        }
+      }
+
+      instance.status = 'busy';
+      instance.lastUsed = new Date();
+      instance.executions++;
+
+      const latency = Date.now() - startTime;
+
+      logger.info('Container acquired', {
+        id: instance.id,
+        latency: `${latency}ms`,
+        executions: instance.executions,
+        poolSize: this.pool.size,
+      });
+
+      this.emit('container:acquired', { instance, latency });
+
+      return instance;
+    } finally {
+      release();
     }
-
-    instance.status = 'busy';
-    instance.lastUsed = new Date();
-    instance.executions++;
-
-    const latency = Date.now() - startTime;
-
-    logger.info('Container acquired', {
-      id: instance.id,
-      latency: `${latency}ms`,
-      executions: instance.executions,
-    });
-
-    this.emit('container:acquired', { instance, latency });
-
-    return instance;
   }
 
   /**
    * Release a container back to the pool
    */
   async release(instanceId: string) {
-    // Release lock first
-    this.acquireLock.delete(instanceId);
     
     const instance = this.pool.get(instanceId);
     if (!instance) {
@@ -327,6 +370,25 @@ export class SandboxWarmPool extends EventEmitter {
 
     instance.status = 'ready';
     instance.lastUsed = new Date();
+
+    // Check disk usage and recycle if exceeded
+    try {
+      const stats = await instance.container.stats({ stream: false });
+      const diskUsageMB = (stats as any).storage_stats?.used_bytes / 1024 / 1024 || 0;
+
+      if (diskUsageMB > this.MAX_DISK_USAGE_MB * 0.9) {
+        logger.warn('Container disk usage high - recycling', {
+          id: instance.id,
+          diskUsageMB,
+          limit: this.MAX_DISK_USAGE_MB,
+        });
+        await this.removeContainer(instanceId);
+        await this.createContainer(instance.config);
+        return;
+      }
+    } catch (error: any) {
+      logger.warn('Could not check disk usage', { id: instanceId, error: error.message });
+    }
 
     logger.info('Container released', {
       id: instance.id,
@@ -496,6 +558,11 @@ export class SandboxWarmPool extends EventEmitter {
    */
   async shutdown() {
     logger.info('Shutting down warm pool...');
+
+    // Stop health check
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+    }
 
     const promises = Array.from(this.pool.keys()).map((id) =>
       this.removeContainer(id)

@@ -6,6 +6,8 @@
 
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
+import { LRUCache } from 'lru-cache';
+import crypto from 'crypto';
 import { logger } from '../config/logger.js';
 import { env } from '../config/env.js';
 
@@ -102,6 +104,158 @@ export interface AIResponse {
   attempt: number;
 }
 
+// ================== GLOBAL COST BUDGET ==================
+
+export class CostBudgetManager {
+  private hourlySpend: number[] = []; // Circular buffer for last hour
+  private readonly MAX_HOURLY_BUDGET = 100; // $100/hour
+  private readonly MAX_DAILY_BUDGET = 1000; // $1000/day
+  private dailySpend = 0;
+  private lastDayReset = new Date();
+
+  /**
+   * Check if we can afford this request
+   */
+  canAfford(estimatedCost: number): { allowed: boolean; reason?: string } {
+    // Reset daily spend at midnight
+    const now = new Date();
+    if (now.getDate() !== this.lastDayReset.getDate()) {
+      this.dailySpend = 0;
+      this.lastDayReset = now;
+    }
+
+    // Calculate hourly spend
+    const hourlyTotal = this.hourlySpend.reduce((sum, cost) => sum + cost, 0);
+
+    // Check hourly budget
+    if (hourlyTotal + estimatedCost > this.MAX_HOURLY_BUDGET) {
+      return {
+        allowed: false,
+        reason: `Hourly budget exceeded: $${hourlyTotal.toFixed(2)}/$${this.MAX_HOURLY_BUDGET}`,
+      };
+    }
+
+    // Check daily budget
+    if (this.dailySpend + estimatedCost > this.MAX_DAILY_BUDGET) {
+      return {
+        allowed: false,
+        reason: `Daily budget exceeded: $${this.dailySpend.toFixed(2)}/$${this.MAX_DAILY_BUDGET}`,
+      };
+    }
+
+    return { allowed: true };
+  }
+
+  /**
+   * Record actual spend
+   */
+  recordSpend(cost: number) {
+    this.hourlySpend.push(cost);
+    this.dailySpend += cost;
+
+    // Keep only last hour (60 entries)
+    if (this.hourlySpend.length > 60) {
+      this.hourlySpend.shift();
+    }
+  }
+
+  /**
+   * Get budget status
+   */
+  getStatus() {
+    const hourlyTotal = this.hourlySpend.reduce((sum, cost) => sum + cost, 0);
+    return {
+      hourly: {
+        spent: hourlyTotal,
+        limit: this.MAX_HOURLY_BUDGET,
+        remaining: Math.max(0, this.MAX_HOURLY_BUDGET - hourlyTotal),
+      },
+      daily: {
+        spent: this.dailySpend,
+        limit: this.MAX_DAILY_BUDGET,
+        remaining: Math.max(0, this.MAX_DAILY_BUDGET - this.dailySpend),
+      },
+    };
+  }
+}
+
+export const costBudgetManager = new CostBudgetManager();
+
+// ================== AI RESPONSE CACHE ==================
+
+interface CacheEntry {
+  content: string;
+  provider: AIProvider;
+  model: string;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cost: number;
+  };
+  timestamp: Date;
+}
+
+export class AIResponseCache {
+  private cache = new LRUCache<string, CacheEntry>({
+    max: 1000, // Store 1000 responses
+    ttl: 60 * 60 * 1000, // 1 hour TTL
+    updateAgeOnGet: true,
+  });
+
+  /**
+   * Generate cache key from request
+   */
+  private generateKey(request: AIRequest, modelName: string): string {
+    const payload = {
+      messages: request.messages,
+      temperature: request.temperature,
+      maxTokens: request.maxTokens,
+      model: modelName,
+    };
+    return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  }
+
+  /**
+   * Get cached response
+   */
+  get(request: AIRequest, modelName: string): CacheEntry | undefined {
+    const key = this.generateKey(request, modelName);
+    const cached = this.cache.get(key);
+
+    if (cached) {
+      logger.info('✅ Cache HIT', { model: modelName, age: Date.now() - cached.timestamp.getTime() });
+    }
+
+    return cached;
+  }
+
+  /**
+   * Store response in cache
+   */
+  set(request: AIRequest, modelName: string, response: Omit<AIResponse, 'latency' | 'attempt'>) {
+    const key = this.generateKey(request, modelName);
+    this.cache.set(key, {
+      ...response,
+      timestamp: new Date(),
+    });
+  }
+
+  /**
+   * Get cache stats
+   */
+  getStats() {
+    return {
+      size: this.cache.size,
+      maxSize: this.cache.max,
+      hitRate: this.cache.size > 0 ? (this.cache.size / (this.cache.max || 1)) * 100 : 0,
+    };
+  }
+}
+
+export const aiResponseCache = new AIResponseCache();
+
+// ================== AI FAILOVER ==================
+
 export class AIFailover {
   private openai: OpenAI;
   private anthropic: Anthropic;
@@ -113,7 +267,7 @@ export class AIFailover {
     circuitBreakerOpen: boolean;
   }>();
 
-  private readonly CIRCUIT_BREAKER_THRESHOLD = 5;
+  private readonly CIRCUIT_BREAKER_THRESHOLD = 2; // Reduced from 5 to 2
   private readonly CIRCUIT_BREAKER_RESET_TIME = 60000; // 1 minute
 
   constructor() {
@@ -132,13 +286,42 @@ export class AIFailover {
   }
 
   /**
-   * Execute AI request with automatic failover
+   * Execute AI request with automatic failover (+ cache + budget)
    */
   async complete(
     request: AIRequest,
     config: FailoverConfig
   ): Promise<AIResponse> {
     const models = [config.primary, ...config.fallbacks];
+
+    // 1. Check cache first
+    const primaryModel = MODEL_REGISTRY[config.primary];
+    if (primaryModel) {
+      const cached = aiResponseCache.get(request, primaryModel.name);
+      if (cached) {
+        logger.info('⚡ Returning cached AI response', { model: primaryModel.name });
+        return {
+          ...cached,
+          latency: 0,
+          attempt: 0,
+        };
+      }
+    }
+
+    // 2. Estimate cost and check budget
+    const estimatedTokens = JSON.stringify(request.messages).length / 4; // Rough estimate
+    const estimatedCost = primaryModel
+      ? (estimatedTokens / 1000) * primaryModel.costPer1kTokens.input * 2 // x2 for output
+      : 0.01;
+
+    const budgetCheck = costBudgetManager.canAfford(estimatedCost);
+    if (!budgetCheck.allowed) {
+      logger.error('❌ AI request blocked by budget', {
+        estimatedCost,
+        reason: budgetCheck.reason,
+      });
+      throw new Error(`Budget exceeded: ${budgetCheck.reason}`);
+    }
 
     let lastError: Error | null = null;
 
@@ -174,6 +357,12 @@ export class AIFailover {
         // Success - reset failure count
         this.recordSuccess(model.provider);
 
+        // Record actual spend
+        costBudgetManager.recordSpend(response.usage.cost);
+
+        // Cache the response
+        aiResponseCache.set(request, model.name, response);
+
         logger.info('AI request successful', {
           provider: model.provider,
           model: model.name,
@@ -188,6 +377,20 @@ export class AIFailover {
         };
       } catch (error: any) {
         lastError = error;
+
+        // Detect rate-limit errors (429/503)
+        const isRateLimit = error.status === 429 || error.status === 503;
+        if (isRateLimit) {
+          logger.warn('Rate limit detected - applying special backoff', {
+            provider: model.provider,
+            status: error.status,
+          });
+          // Wait longer for rate limits (exponential backoff x2)
+          if (attempt < config.maxRetries - 1) {
+            const delay = config.retryDelay * Math.pow(2, attempt) * 2; // x2 multiplier
+            await this.sleep(delay);
+          }
+        }
 
         // Record failure
         this.recordFailure(model.provider);

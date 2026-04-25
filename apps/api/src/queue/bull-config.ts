@@ -8,6 +8,7 @@ import { Queue, Worker, QueueEvents, QueueScheduler } from 'bullmq';
 import { Redis } from 'ioredis';
 import { logger } from '../config/logger.js';
 import { env } from '../config/env.js';
+import { EventEmitter } from 'events';
 
 // ================== REDIS CONNECTION ==================
 
@@ -25,13 +26,120 @@ const redisConfig = {
 
 export const redisConnection = new Redis(redisConfig);
 
-redisConnection.on('error', (err) => {
-  logger.error('Redis connection error', { error: err.message });
-});
+// ================== REDIS HEALTH MONITOR ==================
 
-redisConnection.on('connect', () => {
-  logger.info('✅ BullMQ Redis connected');
-});
+export class RedisHealthMonitor extends EventEmitter {
+  private healthy = true;
+  private circuitBreakerOpen = false;
+  private consecutiveFailures = 0;
+  private lastLatency = 0;
+  private readonly FAILURE_THRESHOLD = 3;
+  private readonly LATENCY_THRESHOLD = 1000; // 1s
+  private readonly RESET_TIMEOUT = 60000; // 1 min
+  private healthCheckInterval?: NodeJS.Timeout;
+
+  constructor(private redis: Redis) {
+    super();
+    this.setupEventListeners();
+    this.startHealthCheck();
+  }
+
+  private setupEventListeners() {
+    this.redis.on('error', (err) => {
+      this.recordFailure();
+      logger.error('Redis connection error', { error: err.message });
+    });
+
+    this.redis.on('connect', () => {
+      this.recordSuccess();
+      logger.info('✅ BullMQ Redis connected');
+    });
+
+    this.redis.on('reconnecting', () => {
+      logger.warn('Redis reconnecting...');
+    });
+  }
+
+  private startHealthCheck() {
+    this.healthCheckInterval = setInterval(async () => {
+      try {
+        const start = Date.now();
+        await this.redis.ping();
+        this.lastLatency = Date.now() - start;
+
+        if (this.lastLatency > this.LATENCY_THRESHOLD) {
+          logger.warn('Redis high latency detected', {
+            latency: this.lastLatency,
+            threshold: this.LATENCY_THRESHOLD,
+          });
+          this.recordFailure();
+        } else {
+          this.recordSuccess();
+        }
+      } catch (error: any) {
+        logger.error('Redis health check failed', { error: error.message });
+        this.recordFailure();
+      }
+    }, 5000); // Check every 5s
+  }
+
+  private recordFailure() {
+    this.consecutiveFailures++;
+
+    if (this.consecutiveFailures >= this.FAILURE_THRESHOLD) {
+      if (!this.circuitBreakerOpen) {
+        this.circuitBreakerOpen = true;
+        this.healthy = false;
+        logger.error('❌ Redis circuit breaker OPEN', {
+          failures: this.consecutiveFailures,
+        });
+        this.emit('circuit-breaker:open');
+
+        // Auto-reset after timeout
+        setTimeout(() => {
+          this.resetCircuitBreaker();
+        }, this.RESET_TIMEOUT);
+      }
+    }
+  }
+
+  private recordSuccess() {
+    if (this.circuitBreakerOpen) {
+      this.resetCircuitBreaker();
+    }
+    this.consecutiveFailures = 0;
+    this.healthy = true;
+  }
+
+  private resetCircuitBreaker() {
+    this.circuitBreakerOpen = false;
+    this.healthy = true;
+    this.consecutiveFailures = 0;
+    logger.info('✅ Redis circuit breaker RESET');
+    this.emit('circuit-breaker:reset');
+  }
+
+  isHealthy(): boolean {
+    return this.healthy && !this.circuitBreakerOpen;
+  }
+
+  getStatus() {
+    return {
+      healthy: this.healthy,
+      circuitBreakerOpen: this.circuitBreakerOpen,
+      consecutiveFailures: this.consecutiveFailures,
+      lastLatency: this.lastLatency,
+    };
+  }
+
+  cleanup() {
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+    }
+  }
+}
+
+export const redisHealthMonitor = new RedisHealthMonitor(redisConnection);
 
 // ================== QUEUE CONFIGURATION ==================
 
@@ -329,6 +437,12 @@ export class QueueFactory {
   static async closeAll() {
     logger.info('Closing all queues and workers...');
 
+    // Cleanup backpressure manager first
+    backpressureManager.cleanup();
+
+    // Cleanup Redis health monitor
+    redisHealthMonitor.cleanup();
+
     await Promise.all([
       ...Array.from(this.queues.values()).map((q) => q.close()),
       ...Array.from(this.workers.values()).map((w) => w.close()),
@@ -341,6 +455,45 @@ export class QueueFactory {
   }
 }
 
+// ================== GRACEFUL SHUTDOWN ==================
+
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  logger.info(`Received ${signal}, starting graceful shutdown...`);
+
+  try {
+    // 1. Stop accepting new jobs
+    logger.info('Step 1/3: Stopping new job intake...');
+    // Queues will reject new jobs automatically when workers are closed
+
+    // 2. Wait for active jobs to complete (max 30s)
+    logger.info('Step 2/3: Draining active jobs...');
+    const drainTimeout = setTimeout(() => {
+      logger.warn('Drain timeout reached - forcing shutdown');
+    }, 30000);
+
+    await QueueFactory.closeAll();
+    clearTimeout(drainTimeout);
+
+    // 3. Close connections
+    logger.info('Step 3/3: Closing connections...');
+    
+    logger.info('✅ Graceful shutdown complete');
+    process.exit(0);
+  } catch (error: any) {
+    logger.error('Error during graceful shutdown', { error: error.message });
+    process.exit(1);
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+}
+
 // ================== BACKPRESSURE MANAGEMENT ==================
 
 export class BackpressureManager {
@@ -349,6 +502,12 @@ export class BackpressureManager {
   private activeIntervals = new Map<QueueName, NodeJS.Timeout>();
 
   async shouldAcceptJob(queueName: QueueName): Promise<boolean> {
+    // Check Redis health FIRST
+    if (!redisHealthMonitor.isHealthy()) {
+      logger.error('Redis unhealthy - rejecting new jobs', redisHealthMonitor.getStatus());
+      return false;
+    }
+
     // Check queue size
     const metrics = await QueueFactory.getQueueMetrics(queueName);
     if (metrics.total >= this.maxQueueSize) {

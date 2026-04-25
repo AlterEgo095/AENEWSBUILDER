@@ -7,6 +7,7 @@
 import crypto from 'crypto';
 import { Docker } from 'dockerode';
 import { logger } from '../../apps/api/src/config/logger.js';
+import { LRUCache } from 'lru-cache';
 
 const docker = new Docker();
 
@@ -21,6 +22,7 @@ export interface ToolSignature {
   publicKey?: string;
   permissions: Permission[];
   timestamp: Date;
+  nonce?: string; // Add nonce for replay protection
 }
 
 export enum Permission {
@@ -37,13 +39,34 @@ export enum Permission {
 
 export class ToolRegistry {
   private registry = new Map<string, ToolSignature>();
-  private readonly SECRET_KEY = process.env.MCP_REGISTRY_SECRET || 'change-me-in-production';
+  private readonly SECRET_KEY: string;
+  private usedNonces = new LRUCache<string, boolean>({
+    max: 10000,
+    ttl: 5 * 60 * 1000, // 5 minutes
+  });
+
+  constructor() {
+    // CRITICAL: Generate secure key if not provided
+    if (!process.env.MCP_REGISTRY_SECRET) {
+      if (process.env.NODE_ENV === 'production') {
+        logger.error('❌ CRITICAL: MCP_REGISTRY_SECRET not set in production!');
+        throw new Error('MCP_REGISTRY_SECRET is required in production');
+      }
+      this.SECRET_KEY = crypto.randomBytes(32).toString('hex');
+      logger.warn('⚠️ Generated random MCP_REGISTRY_SECRET (NOT FOR PRODUCTION)', {
+        key: this.SECRET_KEY.substring(0, 8) + '...',
+      });
+    } else {
+      this.SECRET_KEY = process.env.MCP_REGISTRY_SECRET;
+    }
+  }
 
   /**
-   * Register a tool with signature
+   * Register a tool with signature (with nonce)
    */
-  register(tool: Omit<ToolSignature, 'signature' | 'timestamp'>): ToolSignature {
+  register(tool: Omit<ToolSignature, 'signature' | 'timestamp' | 'nonce'>): ToolSignature {
     const timestamp = new Date();
+    const nonce = crypto.randomBytes(16).toString('hex');
 
     const payload = {
       toolId: tool.toolId,
@@ -52,6 +75,7 @@ export class ToolRegistry {
       author: tool.author,
       permissions: tool.permissions,
       timestamp: timestamp.toISOString(),
+      nonce,
     };
 
     const signature = this.generateSignature(payload);
@@ -60,6 +84,7 @@ export class ToolRegistry {
       ...tool,
       signature,
       timestamp,
+      nonce,
     };
 
     this.registry.set(tool.toolId, signedTool);
@@ -74,12 +99,31 @@ export class ToolRegistry {
   }
 
   /**
-   * Verify tool signature
+   * Verify tool signature (with nonce + timestamp validation)
    */
-  verify(toolId: string): boolean {
+  verify(toolId: string, requestNonce?: string): boolean {
     const tool = this.registry.get(toolId);
     if (!tool) {
       logger.warn('Tool not found in registry', { toolId });
+      return false;
+    }
+
+    // Check nonce replay protection
+    if (requestNonce) {
+      if (this.usedNonces.has(requestNonce)) {
+        logger.error('Nonce replay detected', { toolId, nonce: requestNonce });
+        return false;
+      }
+      this.usedNonces.set(requestNonce, true);
+    }
+
+    // Verify timestamp (reject if older than 5 minutes)
+    const age = Date.now() - tool.timestamp.getTime();
+    if (age > 5 * 60 * 1000) {
+      logger.error('Tool signature expired', {
+        toolId,
+        age: Math.floor(age / 1000) + 's',
+      });
       return false;
     }
 
@@ -90,6 +134,7 @@ export class ToolRegistry {
       author: tool.author,
       permissions: tool.permissions,
       timestamp: tool.timestamp.toISOString(),
+      nonce: tool.nonce,
     };
 
     const expectedSignature = this.generateSignature(payload);
@@ -140,7 +185,140 @@ export class ToolRegistry {
   }
 }
 
+// ================== COMMAND VALIDATOR ==================
+
+export class CommandValidator {
+  // Whitelist of allowed commands (prevent code injection)
+  private static readonly ALLOWED_COMMANDS = new Set([
+    'node',
+    'npm',
+    'npx',
+    'yarn',
+    'pnpm',
+    'python',
+    'python3',
+    'pip',
+    'pip3',
+    'bash',
+    'sh',
+    'ls',
+    'cat',
+    'echo',
+    'pwd',
+    'mkdir',
+    'touch',
+    'cp',
+    'mv',
+    'git',
+  ]);
+
+  // Blacklist of dangerous patterns
+  private static readonly DANGEROUS_PATTERNS = [
+    /rm\s+-rf\s+\//i, // rm -rf /
+    /dd\s+if=/i, // dd if=
+    /:\(\)\s*\{\s*:\|:\&\s*\}\s*;\s*:/i, // Fork bomb
+    /mkfs/i, // Format filesystem
+    /shutdown/i,
+    /reboot/i,
+    /init\s+[0-6]/i,
+    />(\s*)\/dev\/sda/i, // Overwrite disk
+    /curl.*\|.*sh/i, // curl | sh
+    /wget.*\|.*sh/i, // wget | sh
+  ];
+
+  /**
+   * Validate command before execution
+   */
+  static validate(command: string[]): { valid: boolean; reason?: string } {
+    if (!command || command.length === 0) {
+      return { valid: false, reason: 'Empty command' };
+    }
+
+    const cmd = command[0];
+
+    // Check if command is whitelisted
+    if (!this.ALLOWED_COMMANDS.has(cmd)) {
+      return {
+        valid: false,
+        reason: `Command '${cmd}' not in whitelist`,
+      };
+    }
+
+    // Check for dangerous patterns
+    const fullCommand = command.join(' ');
+    for (const pattern of this.DANGEROUS_PATTERNS) {
+      if (pattern.test(fullCommand)) {
+        return {
+          valid: false,
+          reason: `Dangerous pattern detected: ${pattern}`,
+        };
+      }
+    }
+
+    return { valid: true };
+  }
+}
+
+// ================== RATE LIMITER ==================
+
+export class RateLimiter {
+  private requests = new LRUCache<string, number[]>({
+    max: 1000,
+    ttl: 60 * 1000, // 1 minute
+  });
+
+  private readonly MAX_REQUESTS_PER_MINUTE = 10;
+
+  /**
+   * Check if request should be allowed
+   */
+  check(toolId: string): { allowed: boolean; retryAfter?: number } {
+    const now = Date.now();
+    const timestamps = this.requests.get(toolId) || [];
+
+    // Remove old timestamps (older than 1 minute)
+    const recentTimestamps = timestamps.filter((t) => now - t < 60000);
+
+    if (recentTimestamps.length >= this.MAX_REQUESTS_PER_MINUTE) {
+      const oldestTimestamp = recentTimestamps[0];
+      const retryAfter = Math.ceil((oldestTimestamp + 60000 - now) / 1000);
+
+      return {
+        allowed: false,
+        retryAfter,
+      };
+    }
+
+    // Add current timestamp
+    recentTimestamps.push(now);
+    this.requests.set(toolId, recentTimestamps);
+
+    return { allowed: true };
+  }
+
+  /**
+   * Get rate limit status
+   */
+  getStatus(toolId: string): { remaining: number; resetAt: Date } {
+    const now = Date.now();
+    const timestamps = this.requests.get(toolId) || [];
+    const recentTimestamps = timestamps.filter((t) => now - t < 60000);
+
+    const remaining = Math.max(
+      0,
+      this.MAX_REQUESTS_PER_MINUTE - recentTimestamps.length
+    );
+
+    const resetAt = recentTimestamps.length > 0
+      ? new Date(recentTimestamps[0] + 60000)
+      : new Date(now + 60000);
+
+    return { remaining, resetAt };
+  }
+}
+
 export const toolRegistry = new ToolRegistry();
+export const rateLimiter = new RateLimiter();
 
 // ================== CONTAINER ISOLATION ==================
 
@@ -196,7 +374,7 @@ export class SecureExecutor {
   }
 
   /**
-   * Execute tool in isolated container
+   * Execute tool in isolated container (with security checks)
    */
   async execute(config: IsolatedExecutionConfig): Promise<{
     stdout: string;
@@ -205,7 +383,26 @@ export class SecureExecutor {
   }> {
     const startTime = Date.now();
 
-    // Verify tool signature
+    // 1. Rate limiting
+    const rateLimitCheck = rateLimiter.check(config.toolId);
+    if (!rateLimitCheck.allowed) {
+      throw new Error(
+        `Rate limit exceeded for ${config.toolId}. Retry after ${rateLimitCheck.retryAfter}s`
+      );
+    }
+
+    // 2. Command validation
+    const commandValidation = CommandValidator.validate(config.command);
+    if (!commandValidation.valid) {
+      logger.error('Dangerous command blocked', {
+        toolId: config.toolId,
+        command: config.command,
+        reason: commandValidation.reason,
+      });
+      throw new Error(`Command validation failed: ${commandValidation.reason}`);
+    }
+
+    // 3. Verify tool signature
     if (!toolRegistry.verify(config.toolId)) {
       throw new Error(`Tool ${config.toolId} signature verification failed`);
     }
@@ -267,14 +464,21 @@ export class SecureExecutor {
 
       await Promise.race([container.wait(), timeoutPromise]);
 
-      // Get logs
+      // Get logs (with size limit to prevent memory overflow)
       const logs = await container.logs({
         stdout: true,
         stderr: true,
+        tail: 10000, // Limit to last 10k lines
       });
 
-      const stdout = logs.toString().split('\n').filter((l) => !l.includes('stderr')).join('\n');
-      const stderr = logs.toString().split('\n').filter((l) => l.includes('stderr')).join('\n');
+      const logsStr = logs.toString('utf-8', 0, Math.min(logs.length, 10 * 1024 * 1024)); // Max 10MB
+      const stdout = logsStr.split('\n').filter((l) => !l.includes('stderr')).join('\n');
+      const stderr = logsStr.split('\n').filter((l) => l.includes('stderr')).join('\n');
+
+      // Check output size
+      if (stdout.length > 10 * 1024 * 1024) {
+        logger.warn('Tool output truncated (exceeded 10MB)', { toolId: config.toolId });
+      }
 
       // Get exit code
       const inspectData = await container.inspect();
