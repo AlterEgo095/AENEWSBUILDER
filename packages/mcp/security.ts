@@ -225,6 +225,18 @@ export class CommandValidator {
     /curl.*\|.*sh/i, // curl | sh
     /wget.*\|.*sh/i, // wget | sh
   ];
+  
+  // 🔥 INJECTION PATTERNS (SQL, NoSQL, Command)
+  private static readonly INJECTION_PATTERNS = [
+    /'\s*OR\s+'1'\s*=\s*'1/i, // SQL injection
+    /;\s*DROP\s+TABLE/i, // SQL drop
+    /\$\{.*\}/i, // Template injection
+    /\$\(.*\)/i, // Command substitution
+    /`.*`/i, // Backtick execution
+    /\|\|/i, // Command chaining
+    /&&/i, // Command chaining
+    /;.*rm/i, // Command chaining with rm
+  ];
 
   /**
    * Validate command before execution
@@ -254,7 +266,52 @@ export class CommandValidator {
         };
       }
     }
+    
+    // 🔥 CHECK FOR INJECTION PATTERNS
+    for (const pattern of this.INJECTION_PATTERNS) {
+      if (pattern.test(fullCommand)) {
+        logger.error('🚨 Injection attack detected', {
+          command: fullCommand,
+          pattern: pattern.toString(),
+        });
+        return {
+          valid: false,
+          reason: `Injection pattern detected: ${pattern}`,
+        };
+      }
+    }
+    
+    // 🔥 SANITIZE ARGUMENTS
+    const sanitized = this.sanitizeArguments(command.slice(1));
+    if (!sanitized.valid) {
+      return sanitized;
+    }
 
+    return { valid: true };
+  }
+  
+  /**
+   * 🔥 SANITIZE COMMAND ARGUMENTS
+   */
+  private static sanitizeArguments(args: string[]): { valid: boolean; reason?: string } {
+    for (const arg of args) {
+      // Check for null bytes (path traversal)
+      if (arg.includes('\0')) {
+        return { valid: false, reason: 'Null byte detected in argument' };
+      }
+      
+      // Check for path traversal
+      if (arg.includes('../') || arg.includes('..\\')) {
+        logger.warn('Path traversal attempt detected', { arg });
+        return { valid: false, reason: 'Path traversal detected' };
+      }
+      
+      // Check for excessive length (DoS)
+      if (arg.length > 10000) {
+        return { valid: false, reason: 'Argument length exceeds limit (10KB)' };
+      }
+    }
+    
     return { valid: true };
   }
 }
@@ -266,14 +323,44 @@ export class RateLimiter {
     max: 1000,
     ttl: 60 * 1000, // 1 minute
   });
+  
+  // 🔥 USER-BASED RATE LIMITING
+  private userRequests = new LRUCache<string, number[]>({
+    max: 10000,
+    ttl: 60 * 1000,
+  });
 
   private readonly MAX_REQUESTS_PER_MINUTE = 10;
+  private readonly MAX_USER_REQUESTS_PER_MINUTE = 50; // 🔥 Per user limit
 
   /**
-   * Check if request should be allowed
+   * Check if request should be allowed (with user-level rate limiting)
    */
-  check(toolId: string): { allowed: boolean; retryAfter?: number } {
+  check(toolId: string, userId?: string): { allowed: boolean; retryAfter?: number; reason?: string } {
     const now = Date.now();
+    
+    // 🔥 CHECK USER RATE LIMIT FIRST
+    if (userId) {
+      const userTimestamps = this.userRequests.get(userId) || [];
+      const recentUserTimestamps = userTimestamps.filter((t) => now - t < 60000);
+      
+      if (recentUserTimestamps.length >= this.MAX_USER_REQUESTS_PER_MINUTE) {
+        const oldestTimestamp = recentUserTimestamps[0];
+        const retryAfter = Math.ceil((oldestTimestamp + 60000 - now) / 1000);
+        
+        return {
+          allowed: false,
+          retryAfter,
+          reason: 'User rate limit exceeded',
+        };
+      }
+      
+      // Update user timestamps
+      recentUserTimestamps.push(now);
+      this.userRequests.set(userId, recentUserTimestamps);
+    }
+    
+    // CHECK TOOL RATE LIMIT
     const timestamps = this.requests.get(toolId) || [];
 
     // Remove old timestamps (older than 1 minute)
@@ -286,6 +373,7 @@ export class RateLimiter {
       return {
         allowed: false,
         retryAfter,
+        reason: 'Tool rate limit exceeded',
       };
     }
 
@@ -374,26 +462,47 @@ export class SecureExecutor {
   }
 
   /**
-   * Execute tool in isolated container (with security checks)
+   * Execute tool in isolated container (with security checks + audit)
    */
-  async execute(config: IsolatedExecutionConfig): Promise<{
+  async execute(config: IsolatedExecutionConfig & { userId?: string }): Promise<{
     stdout: string;
     stderr: string;
     exitCode: number;
   }> {
     const startTime = Date.now();
+    
+    // 🔥 IMPORT AUDIT LOGGER
+    const { auditLogger, AuditEventType } = await import('./audit-log.js');
 
-    // 1. Rate limiting
-    const rateLimitCheck = rateLimiter.check(config.toolId);
+    // 1. Rate limiting (with user ID)
+    const rateLimitCheck = rateLimiter.check(config.toolId, config.userId);
     if (!rateLimitCheck.allowed) {
+      // 🔥 LOG SECURITY EVENT
+      await auditLogger.logSecurityEvent({
+        type: AuditEventType.RATE_LIMIT_EXCEEDED,
+        toolId: config.toolId,
+        userId: config.userId,
+        reason: rateLimitCheck.reason || 'Rate limit exceeded',
+        data: { retryAfter: rateLimitCheck.retryAfter },
+      });
+      
       throw new Error(
-        `Rate limit exceeded for ${config.toolId}. Retry after ${rateLimitCheck.retryAfter}s`
+        `Rate limit exceeded for ${config.toolId}. ${rateLimitCheck.reason}. Retry after ${rateLimitCheck.retryAfter}s`
       );
     }
 
     // 2. Command validation
     const commandValidation = CommandValidator.validate(config.command);
     if (!commandValidation.valid) {
+      // 🔥 LOG SECURITY EVENT
+      await auditLogger.logSecurityEvent({
+        type: AuditEventType.COMMAND_BLOCKED,
+        toolId: config.toolId,
+        userId: config.userId,
+        reason: commandValidation.reason || 'Command validation failed',
+        data: { command: config.command },
+      });
+      
       logger.error('Dangerous command blocked', {
         toolId: config.toolId,
         command: config.command,
@@ -404,6 +513,12 @@ export class SecureExecutor {
 
     // 3. Verify tool signature
     if (!toolRegistry.verify(config.toolId)) {
+      await auditLogger.logSecurityEvent({
+        type: AuditEventType.PERMISSION_DENIED,
+        toolId: config.toolId,
+        userId: config.userId,
+        reason: 'Signature verification failed',
+      });
       throw new Error(`Tool ${config.toolId} signature verification failed`);
     }
 
@@ -417,12 +532,29 @@ export class SecureExecutor {
     if (config.allowedPermissions) {
       for (const perm of config.allowedPermissions) {
         if (!tool.permissions.includes(perm)) {
+          // 🔥 LOG SECURITY EVENT
+          await auditLogger.logSecurityEvent({
+            type: AuditEventType.PERMISSION_DENIED,
+            toolId: config.toolId,
+            userId: config.userId,
+            reason: `Missing permission: ${perm}`,
+            data: { requestedPermission: perm, toolPermissions: tool.permissions },
+          });
+          
           throw new Error(
             `Tool ${config.toolId} does not have permission: ${perm}`
           );
         }
       }
     }
+    
+    // 🔥 LOG EXECUTION START
+    const eventId = await auditLogger.logToolExecutionStart({
+      toolId: config.toolId,
+      userId: config.userId,
+      command: config.command,
+      permissions: tool.permissions,
+    });
 
     // Determine network mode based on permissions
     const networkMode = tool.permissions.includes(Permission.NETWORK_ACCESS)
@@ -492,9 +624,30 @@ export class SecureExecutor {
         duration,
         networkMode,
       });
+      
+      // 🔥 LOG EXECUTION COMPLETION
+      await auditLogger.logToolExecutionComplete({
+        eventId,
+        toolId: config.toolId,
+        userId: config.userId,
+        duration,
+        exitCode,
+        outputSize: stdout.length + stderr.length,
+      });
 
       return { stdout, stderr, exitCode };
     } catch (error: any) {
+      const duration = Date.now() - startTime;
+      
+      // 🔥 LOG EXECUTION FAILURE
+      await auditLogger.logToolExecutionFailed({
+        eventId,
+        toolId: config.toolId,
+        userId: config.userId,
+        error: error.message,
+        duration,
+      });
+      
       logger.error('MCP tool execution failed', {
         toolId: config.toolId,
         error: error.message,

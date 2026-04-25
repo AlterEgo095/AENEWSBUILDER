@@ -194,6 +194,12 @@ export const defaultWorkerOptions = {
 export class DeadLetterQueue {
   private queue: Queue;
   private events: QueueEvents;
+  
+  // 🔥 AUTO-RETRY STRATEGIES
+  private retryScheduler?: NodeJS.Timeout;
+  private readonly AUTO_RETRY_INTERVAL = 3600000; // 1 hour
+  private readonly MAX_AUTO_RETRIES = 3;
+  private retryAttempts = new Map<string, number>();
 
   constructor() {
     this.queue = new Queue(QUEUE_NAMES.DEAD_LETTER, {
@@ -209,6 +215,7 @@ export class DeadLetterQueue {
     });
 
     this.setupEventListeners();
+    this.startAutoRetryScheduler(); // 🔥 NEW
   }
 
   private setupEventListeners() {
@@ -279,6 +286,71 @@ export class DeadLetterQueue {
   async purge() {
     await this.queue.obliterate({ force: true });
     logger.warn('Dead letter queue purged');
+  }
+  
+  /**
+   * 🔥 AUTO-RETRY SCHEDULER for transient failures
+   */
+  private startAutoRetryScheduler() {
+    this.retryScheduler = setInterval(async () => {
+      try {
+        const failedJobs = await this.getFailedJobs(50);
+        
+        for (const job of failedJobs) {
+          const { originalQueue, jobData, error, timestamp } = job.data;
+          
+          // Check if error is transient (network, timeout, rate limit)
+          const isTransientError = 
+            error?.message?.includes('timeout') ||
+            error?.message?.includes('ECONNREFUSED') ||
+            error?.message?.includes('rate limit') ||
+            error?.message?.includes('503') ||
+            error?.message?.includes('429');
+          
+          if (!isTransientError) continue;
+          
+          // Check retry count
+          const retries = this.retryAttempts.get(job.id!) || 0;
+          if (retries >= this.MAX_AUTO_RETRIES) {
+            logger.warn('Max auto-retries reached for job', {
+              jobId: job.id,
+              queue: originalQueue,
+            });
+            continue;
+          }
+          
+          // Check age (don't retry jobs older than 24h)
+          const age = Date.now() - new Date(timestamp).getTime();
+          if (age > 24 * 3600 * 1000) continue;
+          
+          // Auto-retry
+          logger.info('🔄 Auto-retrying transient failure', {
+            jobId: job.id,
+            queue: originalQueue,
+            attempt: retries + 1,
+            error: error?.message,
+          });
+          
+          try {
+            await this.retryJob(job.id!, originalQueue);
+            this.retryAttempts.set(job.id!, retries + 1);
+          } catch (retryError: any) {
+            logger.error('Auto-retry failed', {
+              jobId: job.id,
+              error: retryError.message,
+            });
+          }
+        }
+      } catch (error: any) {
+        logger.error('Auto-retry scheduler error', { error: error.message });
+      }
+    }, this.AUTO_RETRY_INTERVAL);
+  }
+  
+  cleanup() {
+    if (this.retryScheduler) {
+      clearInterval(this.retryScheduler);
+    }
   }
 }
 
@@ -442,6 +514,9 @@ export class QueueFactory {
 
     // Cleanup Redis health monitor
     redisHealthMonitor.cleanup();
+    
+    // 🔥 Cleanup DLQ auto-retry
+    this.deadLetterQueue.cleanup();
 
     await Promise.all([
       ...Array.from(this.queues.values()).map((q) => q.close()),
@@ -500,6 +575,54 @@ export class BackpressureManager {
   private maxQueueSize = 1000;
   private maxMemoryUsage = 0.8; // 80% memory threshold
   private activeIntervals = new Map<QueueName, NodeJS.Timeout>();
+  
+  // 🔥 ADAPTIVE THRESHOLDS
+  private adaptiveMemoryThreshold = 0.8;
+  private adaptiveConcurrency = new Map<QueueName, number>();
+  private cpuUsageHistory: number[] = [];
+  private readonly CPU_HISTORY_SIZE = 10;
+  
+  // 🔥 DYNAMIC ADJUSTMENT
+  private adjustmentInterval?: NodeJS.Timeout;
+
+  constructor() {
+    this.startAdaptiveAdjustment();
+  }
+
+  /**
+   * 🔥 ADAPTIVE THRESHOLD ADJUSTMENT
+   * Dynamically adjusts thresholds based on system load
+   */
+  private startAdaptiveAdjustment() {
+    this.adjustmentInterval = setInterval(() => {
+      const cpuUsage = process.cpuUsage();
+      const cpuPercent = (cpuUsage.user + cpuUsage.system) / 1e9; // Convert to seconds
+      
+      this.cpuUsageHistory.push(cpuPercent);
+      if (this.cpuUsageHistory.length > this.CPU_HISTORY_SIZE) {
+        this.cpuUsageHistory.shift();
+      }
+      
+      // Calculate average CPU usage
+      const avgCpu = this.cpuUsageHistory.reduce((a, b) => a + b, 0) / this.cpuUsageHistory.length;
+      
+      // Adjust memory threshold based on CPU load
+      if (avgCpu > 0.7) {
+        // High CPU -> lower memory threshold (be more cautious)
+        this.adaptiveMemoryThreshold = Math.max(0.6, this.maxMemoryUsage - 0.2);
+        logger.warn('🔥 Adaptive backpressure: High CPU detected - lowering memory threshold', {
+          avgCpu: avgCpu.toFixed(2),
+          newThreshold: this.adaptiveMemoryThreshold,
+        });
+      } else if (avgCpu < 0.3) {
+        // Low CPU -> increase memory threshold (more aggressive)
+        this.adaptiveMemoryThreshold = Math.min(0.9, this.maxMemoryUsage + 0.1);
+      } else {
+        // Normal CPU -> reset to default
+        this.adaptiveMemoryThreshold = this.maxMemoryUsage;
+      }
+    }, 10000); // Adjust every 10s
+  }
 
   async shouldAcceptJob(queueName: QueueName): Promise<boolean> {
     // Check Redis health FIRST
@@ -516,18 +639,24 @@ export class BackpressureManager {
         current: metrics.total,
         limit: this.maxQueueSize,
       });
+      
+      // 🔥 AUTO-APPLY BACKPRESSURE
+      await this.applyBackpressure(queueName);
       return false;
     }
 
-    // Check memory usage
+    // 🔥 Check memory usage with ADAPTIVE threshold
     const memUsage = process.memoryUsage();
     const memPercent = memUsage.heapUsed / memUsage.heapTotal;
 
-    if (memPercent >= this.maxMemoryUsage) {
-      logger.warn('Memory usage threshold exceeded', {
-        used: memPercent,
-        threshold: this.maxMemoryUsage,
+    if (memPercent >= this.adaptiveMemoryThreshold) {
+      logger.warn('Memory usage threshold exceeded (adaptive)', {
+        used: (memPercent * 100).toFixed(1) + '%',
+        threshold: (this.adaptiveMemoryThreshold * 100).toFixed(1) + '%',
       });
+      
+      // 🔥 AUTO-THROTTLE WORKERS
+      await this.throttleWorkers(queueName, memPercent);
       return false;
     }
 
@@ -580,11 +709,52 @@ export class BackpressureManager {
 
   // Cleanup method to prevent memory leaks
   cleanup() {
+    // 🔥 Stop adaptive adjustment
+    if (this.adjustmentInterval) {
+      clearInterval(this.adjustmentInterval);
+    }
+    
     for (const [queue, interval] of this.activeIntervals.entries()) {
       clearInterval(interval);
       logger.info('Cleared backpressure interval', { queue });
     }
     this.activeIntervals.clear();
+  }
+  
+  /**
+   * 🔥 THROTTLE WORKERS dynamically
+   */
+  private async throttleWorkers(queueName: QueueName, memPercent: number) {
+    const worker = QueueFactory.workers.get(queueName);
+    if (!worker) return;
+    
+    // Get current concurrency
+    const currentConcurrency = this.adaptiveConcurrency.get(queueName) || 5;
+    
+    // Calculate new concurrency based on memory pressure
+    let newConcurrency = currentConcurrency;
+    if (memPercent > 0.9) {
+      // Critical memory -> reduce to 1
+      newConcurrency = 1;
+    } else if (memPercent > 0.85) {
+      // High memory -> reduce by 50%
+      newConcurrency = Math.max(1, Math.floor(currentConcurrency * 0.5));
+    } else if (memPercent > 0.75) {
+      // Moderate memory -> reduce by 25%
+      newConcurrency = Math.max(2, Math.floor(currentConcurrency * 0.75));
+    }
+    
+    if (newConcurrency !== currentConcurrency) {
+      this.adaptiveConcurrency.set(queueName, newConcurrency);
+      // Note: BullMQ doesn't support dynamic concurrency change at runtime
+      // This would require worker restart - log for monitoring
+      logger.warn('🚨 Worker throttling recommended', {
+        queue: queueName,
+        currentConcurrency,
+        recommendedConcurrency: newConcurrency,
+        memoryUsage: (memPercent * 100).toFixed(1) + '%',
+      });
+    }
   }
 }
 

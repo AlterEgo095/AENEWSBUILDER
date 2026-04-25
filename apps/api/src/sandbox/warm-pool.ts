@@ -36,6 +36,17 @@ export class SandboxWarmPool extends EventEmitter {
   private acquireMutex = new Mutex(); // Thread-safe replacement
   private dockerHealthy = true;
   private healthCheckInterval?: NodeJS.Timeout;
+  
+  // 🔥 CHAOS RESISTANCE
+  private circuitBreaker = { failures: 0, lastFailure: 0, state: 'closed' as 'open' | 'half-open' | 'closed' };
+  private readonly CIRCUIT_BREAKER_THRESHOLD = 5;
+  private readonly CIRCUIT_BREAKER_TIMEOUT = 30000; // 30s before retry
+  
+  // 🔥 MEMORY LEAK DETECTION
+  private memoryLeakDetector?: NodeJS.Timeout;
+  
+  // 🔥 WAITING QUEUE (graceful degradation)
+  private waitingQueue: Array<{ config: SandboxConfig; resolve: Function; reject: Function }> = [];
 
   // Pool configuration
   private readonly MIN_POOL_SIZE = 3;
@@ -51,26 +62,46 @@ export class SandboxWarmPool extends EventEmitter {
     super();
     this.initialize();
     this.startDockerHealthCheck();
+    this.startMemoryLeakDetector(); // 🔥 NEW
   }
 
   /**
-   * Monitor Docker daemon health
+   * Monitor Docker daemon health + AUTO-RECOVERY
    */
   private startDockerHealthCheck() {
     this.healthCheckInterval = setInterval(async () => {
       try {
         await docker.ping();
         if (!this.dockerHealthy) {
-          logger.info('✅ Docker daemon recovered');
+          logger.info('✅ Docker daemon recovered - AUTO-HEALING POOL');
           this.dockerHealthy = true;
-          // Re-warm pool after recovery
-          await this.warmPool();
+          
+          // 🔥 RESET CIRCUIT BREAKER
+          this.circuitBreaker.state = 'half-open';
+          
+          // 🔥 AUTO-RECOVERY: Restore lost containers
+          const lostContainers = this.MIN_POOL_SIZE - this.pool.size;
+          if (lostContainers > 0) {
+            logger.warn(`⚠️ Detected ${lostContainers} lost containers - restoring...`);
+            await this.warmPool();
+          }
+          
+          // 🔥 PROCESS WAITING QUEUE
+          this.processWaitingQueue();
         }
       } catch (error: any) {
         if (this.dockerHealthy) {
           logger.error('❌ Docker daemon unhealthy', { error: error.message });
           this.dockerHealthy = false;
           this.emit('docker:unhealthy');
+          
+          // 🔥 OPEN CIRCUIT BREAKER
+          this.circuitBreaker.failures++;
+          this.circuitBreaker.lastFailure = Date.now();
+          if (this.circuitBreaker.failures >= this.CIRCUIT_BREAKER_THRESHOLD) {
+            this.circuitBreaker.state = 'open';
+            logger.error('🔴 CIRCUIT BREAKER OPEN - Too many Docker failures');
+          }
         }
       }
     }, 10000); // Check every 10s
@@ -285,9 +316,31 @@ export class SandboxWarmPool extends EventEmitter {
    * Acquire a container from the pool (THREAD-SAFE with Mutex)
    */
   async acquire(config: SandboxConfig): Promise<SandboxInstance> {
+    // 🔥 CHECK CIRCUIT BREAKER
+    if (this.circuitBreaker.state === 'open') {
+      const timeSinceLastFailure = Date.now() - this.circuitBreaker.lastFailure;
+      if (timeSinceLastFailure < this.CIRCUIT_BREAKER_TIMEOUT) {
+        throw new Error(`Circuit breaker OPEN - Docker unstable (retry in ${Math.ceil((this.CIRCUIT_BREAKER_TIMEOUT - timeSinceLastFailure) / 1000)}s)`);
+      }
+      // Try half-open
+      this.circuitBreaker.state = 'half-open';
+    }
+    
     // Check Docker health first
     if (!this.dockerHealthy) {
-      throw new Error('Docker daemon is unhealthy - cannot acquire container');
+      // 🔥 GRACEFUL DEGRADATION: Add to waiting queue instead of failing
+      logger.warn('Docker unhealthy - adding request to waiting queue');
+      return new Promise((resolve, reject) => {
+        this.waitingQueue.push({ config, resolve, reject });
+        // Auto-reject after 60s
+        setTimeout(() => {
+          const index = this.waitingQueue.findIndex(item => item.resolve === resolve);
+          if (index !== -1) {
+            this.waitingQueue.splice(index, 1);
+            reject(new Error('Timeout waiting for Docker recovery'));
+          }
+        }, 60000);
+      });
     }
 
     const startTime = Date.now();
@@ -315,22 +368,34 @@ export class SandboxWarmPool extends EventEmitter {
         if (this.pool.size < this.MAX_POOL_SIZE) {
           instance = await this.createContainer(config);
         } else {
-          // Release lock before waiting
-          release();
-          // Wait for a container to become available
-          instance = await this.waitForAvailableContainer(config, 10000);
-          if (!instance) {
-            throw new Error('No containers available - pool saturated');
-          }
-          // Re-acquire lock
-          const newRelease = await this.acquireMutex.acquire();
-          release = newRelease as any; // Update release function
+          // 🔥 GRACEFUL DEGRADATION: Add to waiting queue
+          logger.warn('Pool saturated - adding request to waiting queue');
+          release(); // Release lock first
+          
+          return new Promise((resolve, reject) => {
+            this.waitingQueue.push({ config, resolve, reject });
+            // Auto-reject after 30s
+            setTimeout(() => {
+              const index = this.waitingQueue.findIndex(item => item.resolve === resolve);
+              if (index !== -1) {
+                this.waitingQueue.splice(index, 1);
+                reject(new Error('Timeout waiting for available container - pool overloaded'));
+              }
+            }, 30000);
+          });
         }
       }
 
       instance.status = 'busy';
       instance.lastUsed = new Date();
       instance.executions++;
+      
+      // 🔥 SUCCESS: Reset circuit breaker
+      if (this.circuitBreaker.state === 'half-open') {
+        this.circuitBreaker.state = 'closed';
+        this.circuitBreaker.failures = 0;
+        logger.info('✅ Circuit breaker CLOSED - Docker stable');
+      }
 
       const latency = Date.now() - startTime;
 
@@ -344,6 +409,11 @@ export class SandboxWarmPool extends EventEmitter {
       this.emit('container:acquired', { instance, latency });
 
       return instance;
+    } catch (error: any) {
+      // 🔥 CIRCUIT BREAKER: Track failures
+      this.circuitBreaker.failures++;
+      this.circuitBreaker.lastFailure = Date.now();
+      throw error;
     } finally {
       release();
     }
@@ -365,6 +435,9 @@ export class SandboxWarmPool extends EventEmitter {
       await this.removeContainer(instanceId);
       // Replace with a new warm container
       await this.createContainer(instance.config);
+      
+      // 🔥 PROCESS WAITING QUEUE
+      this.processWaitingQueue();
       return;
     }
 
@@ -384,6 +457,9 @@ export class SandboxWarmPool extends EventEmitter {
         });
         await this.removeContainer(instanceId);
         await this.createContainer(instance.config);
+        
+        // 🔥 PROCESS WAITING QUEUE
+        this.processWaitingQueue();
         return;
       }
     } catch (error: any) {
@@ -396,6 +472,9 @@ export class SandboxWarmPool extends EventEmitter {
     });
 
     this.emit('container:released', instance);
+    
+    // 🔥 PROCESS WAITING QUEUE
+    this.processWaitingQueue();
   }
 
   /**
@@ -563,6 +642,11 @@ export class SandboxWarmPool extends EventEmitter {
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
     }
+    
+    // 🔥 Stop memory leak detector
+    if (this.memoryLeakDetector) {
+      clearInterval(this.memoryLeakDetector);
+    }
 
     const promises = Array.from(this.pool.keys()).map((id) =>
       this.removeContainer(id)
@@ -571,6 +655,64 @@ export class SandboxWarmPool extends EventEmitter {
     await Promise.all(promises);
 
     logger.info('✅ Warm pool shut down');
+  }
+
+  /**
+   * 🔥 MEMORY LEAK DETECTOR (proactive monitoring)
+   */
+  private startMemoryLeakDetector() {
+    this.memoryLeakDetector = setInterval(async () => {
+      for (const [id, instance] of this.pool.entries()) {
+        try {
+          const stats = await instance.container.stats({ stream: false });
+          const memoryUsageMB = (stats as any).memory_stats?.usage / 1024 / 1024 || 0;
+          const memoryLimitMB = this.parseMemory(instance.config.memory || '512m') / 1024 / 1024;
+          const memoryUsagePercent = (memoryUsageMB / memoryLimitMB) * 100;
+
+          // 🚨 MEMORY LEAK DETECTED
+          if (memoryUsagePercent > 85) {
+            logger.warn('🚨 Memory leak detected - recycling container', {
+              id: instance.id,
+              memoryUsageMB: memoryUsageMB.toFixed(2),
+              memoryLimitMB,
+              usagePercent: memoryUsagePercent.toFixed(1),
+            });
+            
+            // Force recycle
+            if (instance.status === 'ready') {
+              await this.removeContainer(id);
+              await this.createContainer(instance.config);
+            }
+          }
+        } catch (error: any) {
+          // Container might be dead - clean it up
+          logger.error('Failed to check container memory - removing', {
+            id: instance.id,
+            error: error.message,
+          });
+          await this.removeContainer(id);
+        }
+      }
+    }, 30000); // Check every 30s
+  }
+
+  /**
+   * 🔥 PROCESS WAITING QUEUE (after Docker recovery)
+   */
+  private processWaitingQueue() {
+    if (this.waitingQueue.length === 0) return;
+
+    logger.info(`🔄 Processing ${this.waitingQueue.length} queued requests...`);
+
+    // Process queue in FIFO order
+    while (this.waitingQueue.length > 0) {
+      const request = this.waitingQueue.shift();
+      if (request) {
+        this.acquire(request.config)
+          .then(request.resolve)
+          .catch(request.reject);
+      }
+    }
   }
 
   /**
