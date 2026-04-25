@@ -1,0 +1,161 @@
+{
+  "dashboard": {
+    "title": "AENEWS BUILDER - Production Monitoring",
+    "timezone": "utc",
+    "editable": true,
+    "panels": [
+      {
+        "id": 1,
+        "title": "API Response Time (p50, p95, p99)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, http_request_duration_seconds_bucket)",
+            "legendFormat": "p50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, http_request_duration_seconds_bucket)",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, http_request_duration_seconds_bucket)",
+            "legendFormat": "p99"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Request Rate (req/s)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(http_requests_total[5m])",
+            "legendFormat": "{{method}} {{route}}"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Error Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(http_requests_total{status=~\"5..\"}[5m])",
+            "legendFormat": "5xx Errors"
+          },
+          {
+            "expr": "rate(http_requests_total{status=~\"4..\"}[5m])",
+            "legendFormat": "4xx Errors"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Active Queue Jobs",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "bullmq_queue_active_count",
+            "legendFormat": "Active Jobs"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Queue Throughput",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(bullmq_job_completed_total[5m])",
+            "legendFormat": "Completed"
+          },
+          {
+            "expr": "rate(bullmq_job_failed_total[5m])",
+            "legendFormat": "Failed"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Sandbox Pool Health",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "sandbox_pool_available",
+            "legendFormat": "Available"
+          },
+          {
+            "expr": "sandbox_pool_busy",
+            "legendFormat": "Busy"
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "AI Model Usage",
+        "type": "piechart",
+        "targets": [
+          {
+            "expr": "sum(increase(ai_model_requests_total[1h])) by (model)",
+            "legendFormat": "{{model}}"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Cost per Hour",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(ai_cost_total[1h]) * 3600",
+            "legendFormat": "$/hour"
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Database Connections",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "pg_stat_database_numbackends{datname=\"aenews_db\"}",
+            "legendFormat": "Active Connections"
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Redis Memory Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "redis_memory_used_bytes / 1024 / 1024",
+            "legendFormat": "Memory (MB)"
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "title": "Container CPU Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(container_cpu_usage_seconds_total{name=~\"aenews.*\"}[5m]) * 100",
+            "legendFormat": "{{name}}"
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "title": "Container Memory Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "container_memory_usage_bytes{name=~\"aenews.*\"} / 1024 / 1024",
+            "legendFormat": "{{name}} (MB)"
+          }
+        ]
+      }
+    ]
+  }
+}
