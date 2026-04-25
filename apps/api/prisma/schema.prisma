@@ -1,0 +1,71 @@
+// This is your Prisma schema file
+// Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projects Project[]
+
+  @@map("users")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  prompt      String   @db.Text
+  state       String   @default("INIT")
+  context     Json     @default("{}")
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deployUrl   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  events      Event[]
+  costRecords CostRecord[]
+
+  @@index([userId])
+  @@map("projects")
+}
+
+model Event {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  state     String
+  nextState String
+  event     String
+  data      Json?
+  timestamp DateTime @default(now())
+
+  @@index([projectId])
+  @@map("events")
+}
+
+model CostRecord {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  operation String
+  tokens    Int?
+  cost      Float
+  timestamp DateTime @default(now())
+
+  @@index([projectId])
+  @@index([timestamp])
+  @@map("cost_records")
+}
