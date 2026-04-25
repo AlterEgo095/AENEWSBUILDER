@@ -346,6 +346,7 @@ export class QueueFactory {
 export class BackpressureManager {
   private maxQueueSize = 1000;
   private maxMemoryUsage = 0.8; // 80% memory threshold
+  private activeIntervals = new Map<QueueName, NodeJS.Timeout>();
 
   async shouldAcceptJob(queueName: QueueName): Promise<boolean> {
     // Check queue size
@@ -375,16 +376,56 @@ export class BackpressureManager {
   }
 
   async applyBackpressure(queueName: QueueName) {
-    await QueueFactory.pauseQueue(queueName);
+    // Cancel existing backpressure for this queue
+    if (this.activeIntervals.has(queueName)) {
+      clearInterval(this.activeIntervals.get(queueName)!);
+    }
 
-    // Wait for queue to drain
+    await QueueFactory.pauseQueue(queueName);
+    
+    let attempts = 0;
+    const maxAttempts = 60; // 5 min timeout
+
     const checkInterval = setInterval(async () => {
-      const metrics = await QueueFactory.getQueueMetrics(queueName);
-      if (metrics.total < this.maxQueueSize * 0.5) {
+      attempts++;
+      
+      try {
+        const metrics = await QueueFactory.getQueueMetrics(queueName);
+        
+        if (metrics.total < this.maxQueueSize * 0.5 || attempts >= maxAttempts) {
+          clearInterval(checkInterval);
+          this.activeIntervals.delete(queueName);
+          
+          if (attempts < maxAttempts) {
+            await QueueFactory.resumeQueue(queueName);
+            logger.info('Backpressure released', { queue: queueName });
+          } else {
+            logger.error('Backpressure timeout - manual intervention required', {
+              queue: queueName,
+              currentSize: metrics.total,
+            });
+          }
+        }
+      } catch (error: any) {
+        logger.error('Backpressure check failed', { 
+          queue: queueName, 
+          error: error.message 
+        });
         clearInterval(checkInterval);
-        await QueueFactory.resumeQueue(queueName);
+        this.activeIntervals.delete(queueName);
       }
     }, 5000);
+
+    this.activeIntervals.set(queueName, checkInterval);
+  }
+
+  // Cleanup method to prevent memory leaks
+  cleanup() {
+    for (const [queue, interval] of this.activeIntervals.entries()) {
+      clearInterval(interval);
+      logger.info('Cleared backpressure interval', { queue });
+    }
+    this.activeIntervals.clear();
   }
 }
 

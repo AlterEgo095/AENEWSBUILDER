@@ -32,6 +32,7 @@ export interface SandboxInstance {
 export class SandboxWarmPool extends EventEmitter {
   private pool: Map<string, SandboxInstance> = new Map();
   private templates: Map<string, Docker.Image> = new Map();
+  private acquireLock = new Map<string, boolean>();
 
   // Pool configuration
   private readonly MIN_POOL_SIZE = 3;
@@ -249,26 +250,40 @@ export class SandboxWarmPool extends EventEmitter {
   }
 
   /**
-   * Acquire a container from the pool
+   * Acquire a container from the pool (thread-safe)
    */
   async acquire(config: SandboxConfig): Promise<SandboxInstance> {
     const startTime = Date.now();
 
-    // Try to find a ready container with matching template
-    let instance = Array.from(this.pool.values()).find(
-      (inst) =>
+    // Find and atomically lock a container
+    let instance: SandboxInstance | undefined;
+    
+    for (const inst of this.pool.values()) {
+      if (
         inst.status === 'ready' &&
         inst.config.template === config.template &&
-        inst.executions < this.MAX_EXECUTIONS_PER_CONTAINER
-    );
+        inst.executions < this.MAX_EXECUTIONS_PER_CONTAINER &&
+        !this.acquireLock.get(inst.id)
+      ) {
+        // Atomic lock
+        this.acquireLock.set(inst.id, true);
+        instance = inst;
+        break;
+      }
+    }
 
     if (!instance) {
       // Create new container if pool not full
       if (this.pool.size < this.MAX_POOL_SIZE) {
         instance = await this.createContainer(config);
+        this.acquireLock.set(instance.id, true);
       } else {
         // Wait for a container to become available
         instance = await this.waitForAvailableContainer(config, 10000);
+        if (!instance) {
+          throw new Error('No containers available - pool saturated');
+        }
+        this.acquireLock.set(instance.id, true);
       }
     }
 
@@ -293,6 +308,9 @@ export class SandboxWarmPool extends EventEmitter {
    * Release a container back to the pool
    */
   async release(instanceId: string) {
+    // Release lock first
+    this.acquireLock.delete(instanceId);
+    
     const instance = this.pool.get(instanceId);
     if (!instance) {
       logger.warn('Cannot release unknown container', { id: instanceId });

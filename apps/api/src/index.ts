@@ -106,12 +106,40 @@ async function bootstrap() {
       },
     });
 
-    // JWT Decorator
+    // JWT Decorator with Claims Validation
     app.decorate('authenticate', async (request: any, reply: any) => {
       try {
-        await request.jwtVerify();
-      } catch (err) {
-        reply.code(401).send({ error: 'Unauthorized', message: 'Invalid token' });
+        const decoded = await request.jwtVerify();
+        
+        // Validate token claims
+        if (!decoded.sub || !decoded.exp) {
+          throw new Error('Invalid token claims');
+        }
+        
+        // Check token expiration with clock skew tolerance (5 min)
+        const now = Math.floor(Date.now() / 1000);
+        if (decoded.exp && decoded.exp < now - 300) {
+          throw new Error('Token expired');
+        }
+        
+        // Validate audience (if configured)
+        if (config.jwt.audience && decoded.aud !== config.jwt.audience) {
+          throw new Error('Invalid token audience');
+        }
+        
+        // Attach user info to request
+        request.user = { id: decoded.sub, email: decoded.email };
+        
+      } catch (err: any) {
+        logger.warn('Authentication failed', { 
+          error: err.message, 
+          ip: request.ip,
+          path: request.url 
+        });
+        reply.code(401).send({ 
+          error: 'Unauthorized', 
+          message: 'Invalid or expired token' 
+        });
       }
     });
 
