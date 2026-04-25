@@ -1,0 +1,100 @@
+.preview {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #1e1e2e;
+}
+
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: #2a2a3c;
+  border-bottom: 1px solid #3f3f46;
+}
+
+.preview-header h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #a78bfa;
+}
+
+.deploy-link {
+  background: #10b981;
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+
+.deploy-link:hover {
+  background: #059669;
+}
+
+.preview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #71717a;
+  font-style: italic;
+  padding: 2rem;
+  text-align: center;
+}
+
+.preview-iframe-container {
+  flex: 1;
+  background: white;
+  overflow: hidden;
+}
+
+.preview-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.preview-files {
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.preview-files h4 {
+  font-size: 1rem;
+  margin-bottom: 1rem;
+  color: #a78bfa;
+}
+
+.file-list {
+  list-style: none;
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: #0a0e27;
+  border-radius: 4px;
+  margin-bottom: 0.5rem;
+  transition: background 0.2s;
+}
+
+.file-item:hover {
+  background: #2a2a3c;
+}
+
+.file-icon {
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+
+.file-name {
+  font-family: 'Fira Code', monospace;
+  font-size: 0.9rem;
+  color: #e4e4e7;
+}
