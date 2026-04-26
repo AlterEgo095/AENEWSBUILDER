@@ -112,16 +112,50 @@ export class CostBudgetManager {
   private readonly MAX_DAILY_BUDGET = 1000; // $1000/day
   private dailySpend = 0;
   private lastDayReset = new Date();
+  
+  // 🔥 COST SPIKE DETECTION
+  private recentRequests: Array<{ cost: number; timestamp: number }> = [];
+  private readonly SPIKE_WINDOW = 60000; // 1 minute
+  private readonly SPIKE_THRESHOLD = 10; // $10 in 1 minute = spike
+  
+  // 🔥 RUNAWAY LOOP DETECTION
+  private projectRequestCounts = new Map<string, number>();
+  private readonly MAX_REQUESTS_PER_PROJECT = 100; // Per hour
 
   /**
    * Check if we can afford this request
    */
-  canAfford(estimatedCost: number): { allowed: boolean; reason?: string } {
+  canAfford(estimatedCost: number, projectId?: string): { allowed: boolean; reason?: string } {
     // Reset daily spend at midnight
     const now = new Date();
     if (now.getDate() !== this.lastDayReset.getDate()) {
       this.dailySpend = 0;
       this.lastDayReset = now;
+      this.projectRequestCounts.clear(); // Reset project counts
+    }
+    
+    // 🔥 CHECK RUNAWAY LOOP (per-project limit)
+    if (projectId) {
+      const requestCount = this.projectRequestCounts.get(projectId) || 0;
+      if (requestCount >= this.MAX_REQUESTS_PER_PROJECT) {
+        return {
+          allowed: false,
+          reason: `🚨 RUNAWAY LOOP DETECTED: Project ${projectId} exceeded ${this.MAX_REQUESTS_PER_PROJECT} requests/hour`,
+        };
+      }
+    }
+    
+    // 🔥 CHECK COST SPIKE (sudden cost increase)
+    const nowTimestamp = Date.now();
+    const recentCosts = this.recentRequests
+      .filter(r => nowTimestamp - r.timestamp < this.SPIKE_WINDOW)
+      .reduce((sum, r) => sum + r.cost, 0);
+    
+    if (recentCosts + estimatedCost > this.SPIKE_THRESHOLD) {
+      return {
+        allowed: false,
+        reason: `🚨 COST SPIKE DETECTED: $${(recentCosts + estimatedCost).toFixed(2)} in last minute (threshold: $${this.SPIKE_THRESHOLD})`,
+      };
     }
 
     // Calculate hourly spend
@@ -149,13 +183,26 @@ export class CostBudgetManager {
   /**
    * Record actual spend
    */
-  recordSpend(cost: number) {
+  recordSpend(cost: number, projectId?: string) {
     this.hourlySpend.push(cost);
     this.dailySpend += cost;
 
     // Keep only last hour (60 entries)
     if (this.hourlySpend.length > 60) {
       this.hourlySpend.shift();
+    }
+    
+    // 🔥 TRACK COST SPIKE
+    this.recentRequests.push({ cost, timestamp: Date.now() });
+    // Keep only last 5 min
+    this.recentRequests = this.recentRequests.filter(
+      r => Date.now() - r.timestamp < 5 * 60 * 1000
+    );
+    
+    // 🔥 TRACK PROJECT REQUEST COUNT
+    if (projectId) {
+      const count = this.projectRequestCounts.get(projectId) || 0;
+      this.projectRequestCounts.set(projectId, count + 1);
     }
   }
 

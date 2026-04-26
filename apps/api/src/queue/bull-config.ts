@@ -37,11 +37,16 @@ export class RedisHealthMonitor extends EventEmitter {
   private readonly LATENCY_THRESHOLD = 1000; // 1s
   private readonly RESET_TIMEOUT = 60000; // 1 min
   private healthCheckInterval?: NodeJS.Timeout;
+  
+  // 🔥 SPLIT-BRAIN DETECTION
+  private lastRedisInfo: any = null;
+  private splitBrainDetected = false;
 
   constructor(private redis: Redis) {
     super();
     this.setupEventListeners();
     this.startHealthCheck();
+    this.startSplitBrainDetection(); // 🔥 NEW
   }
 
   private setupEventListeners() {
@@ -120,7 +125,7 @@ export class RedisHealthMonitor extends EventEmitter {
   }
 
   isHealthy(): boolean {
-    return this.healthy && !this.circuitBreakerOpen;
+    return this.healthy && !this.circuitBreakerOpen && !this.splitBrainDetected; // 🔥 CHECK SPLIT-BRAIN
   }
 
   getStatus() {
@@ -129,6 +134,7 @@ export class RedisHealthMonitor extends EventEmitter {
       circuitBreakerOpen: this.circuitBreakerOpen,
       consecutiveFailures: this.consecutiveFailures,
       lastLatency: this.lastLatency,
+      splitBrainDetected: this.splitBrainDetected, // 🔥 NEW
     };
   }
 
@@ -136,6 +142,49 @@ export class RedisHealthMonitor extends EventEmitter {
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
     }
+  }
+  
+  /**
+   * 🔥 DETECT REDIS SPLIT-BRAIN (cluster partition)
+   */
+  private startSplitBrainDetection() {
+    setInterval(async () => {
+      try {
+        // Get Redis INFO (replication status)
+        const info = await this.redis.info('replication');
+        
+        if (this.lastRedisInfo) {
+          // Check if master/slave status changed unexpectedly
+          const currentRole = this.extractRole(info);
+          const lastRole = this.extractRole(this.lastRedisInfo);
+          
+          if (currentRole !== lastRole) {
+            logger.error('🚨 SPLIT-BRAIN DETECTED: Redis role changed', {
+              from: lastRole,
+              to: currentRole,
+            });
+            this.splitBrainDetected = true;
+            this.emit('split-brain:detected');
+            
+            // Auto-recover after 30s
+            setTimeout(() => {
+              this.splitBrainDetected = false;
+              logger.info('✅ Split-brain recovered');
+              this.emit('split-brain:recovered');
+            }, 30000);
+          }
+        }
+        
+        this.lastRedisInfo = info;
+      } catch (error: any) {
+        logger.error('Split-brain detection failed', { error: error.message });
+      }
+    }, 15000); // Check every 15s
+  }
+  
+  private extractRole(info: string): string {
+    const match = info.match(/role:(\w+)/);
+    return match ? match[1] : 'unknown';
   }
 }
 

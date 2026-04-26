@@ -228,7 +228,7 @@ export class CommandValidator {
   
   // 🔥 INJECTION PATTERNS (SQL, NoSQL, Command)
   private static readonly INJECTION_PATTERNS = [
-    /'\s*OR\s+'1'\s*=\s*'1/i, // SQL injection
+    /'\ s*OR\s+'1'\s*=\s*'1/i, // SQL injection
     /;\s*DROP\s+TABLE/i, // SQL drop
     /\$\{.*\}/i, // Template injection
     /\$\(.*\)/i, // Command substitution
@@ -236,6 +236,18 @@ export class CommandValidator {
     /\|\|/i, // Command chaining
     /&&/i, // Command chaining
     /;.*rm/i, // Command chaining with rm
+  ];
+  
+  // 🔥 FUZZING DETECTION PATTERNS
+  private static readonly FUZZING_PATTERNS = [
+    /(%00|\x00)/i, // Null byte injection
+    /(\.\.[\/\\]){3,}/i, // Excessive path traversal
+    /(\r\n|\n){10,}/i, // CRLF injection
+    /<script[^>]*>.*?<\/script>/i, // XSS attempt
+    /eval\s*\(/i, // eval() injection
+    /__proto__|constructor\s*\[/i, // Prototype pollution
+    /\${.*?}/g, // Template string injection
+    /(union|select|insert|update|delete|drop)\s+(all|distinct|from|into)/i, // SQL keywords
   ];
 
   /**
@@ -277,6 +289,20 @@ export class CommandValidator {
         return {
           valid: false,
           reason: `Injection pattern detected: ${pattern}`,
+        };
+      }
+    }
+    
+    // 🔥 CHECK FOR FUZZING PATTERNS
+    for (const pattern of this.FUZZING_PATTERNS) {
+      if (pattern.test(fullCommand)) {
+        logger.error('🚨 Fuzzing attack detected', {
+          command: fullCommand,
+          pattern: pattern.toString(),
+        });
+        return {
+          valid: false,
+          reason: `Fuzzing pattern detected: ${pattern}`,
         };
       }
     }

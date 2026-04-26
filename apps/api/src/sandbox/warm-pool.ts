@@ -62,7 +62,9 @@ export class SandboxWarmPool extends EventEmitter {
     super();
     this.initialize();
     this.startDockerHealthCheck();
-    this.startMemoryLeakDetector(); // 🔥 NEW
+    this.startMemoryLeakDetector();
+    this.startZombieKiller(); // 🔥 NEW: Kill zombie containers
+    this.startDiskSaturationMonitor(); // 🔥 NEW: Prevent disk full
   }
 
   /**
@@ -655,6 +657,112 @@ export class SandboxWarmPool extends EventEmitter {
     await Promise.all(promises);
 
     logger.info('✅ Warm pool shut down');
+  }
+  
+  /**
+   * 🔥 ZOMBIE CONTAINER KILLER (detect stuck containers)
+   */
+  private startZombieKiller() {
+    setInterval(async () => {
+      try {
+        // List all containers with aenews.type=sandbox label
+        const containers = await docker.listContainers({
+          all: true,
+          filters: {
+            label: ['aenews.type=sandbox'],
+          },
+        });
+        
+        for (const containerInfo of containers) {
+          const id = containerInfo.Id;
+          const state = containerInfo.State;
+          const created = new Date(containerInfo.Created * 1000);
+          const age = Date.now() - created.getTime();
+          
+          // Zombie conditions:
+          // 1. Exited but still in pool
+          // 2. Running for >30 min with status 'busy' (likely stuck)
+          const isZombie = 
+            (state === 'exited' && age > 60000) || // Dead for >1min
+            (state === 'running' && age > 30 * 60 * 1000); // Running >30min
+          
+          if (isZombie) {
+            logger.warn('🧟 ZOMBIE CONTAINER DETECTED - killing', {
+              id: id.substring(0, 12),
+              state,
+              age: Math.floor(age / 1000) + 's',
+            });
+            
+            // Force kill
+            const container = docker.getContainer(id);
+            try {
+              await container.stop({ t: 1 });
+              await container.remove({ force: true });
+            } catch (killError: any) {
+              logger.error('Failed to kill zombie', {
+                id: id.substring(0, 12),
+                error: killError.message,
+              });
+            }
+            
+            // Remove from pool if exists
+            for (const [poolId, instance] of this.pool.entries()) {
+              if (instance.container.id === id) {
+                this.pool.delete(poolId);
+                break;
+              }
+            }
+          }
+        }
+      } catch (error: any) {
+        logger.error('Zombie killer error', { error: error.message });
+      }
+    }, 60000); // Check every 1 min
+  }
+  
+  /**
+   * 🔥 DISK SATURATION MONITOR (prevent disk full crashes)
+   */
+  private startDiskSaturationMonitor() {
+    setInterval(async () => {
+      try {
+        // Get Docker disk usage
+        const df = await docker.df();
+        const volumesSize = df.Volumes?.reduce((sum, v) => sum + v.UsageData.Size, 0) || 0;
+        const imagesSize = df.Images?.reduce((sum, i) => sum + i.Size, 0) || 0;
+        const containersSize = df.Containers?.reduce((sum, c) => sum + c.SizeRw, 0) || 0;
+        
+        const totalUsageMB = (volumesSize + imagesSize + containersSize) / 1024 / 1024;
+        const DISK_LIMIT_MB = 50000; // 50GB limit
+        
+        if (totalUsageMB > DISK_LIMIT_MB * 0.9) {
+          logger.error('🚨 DISK SATURATION DETECTED', {
+            usageMB: totalUsageMB.toFixed(2),
+            limitMB: DISK_LIMIT_MB,
+            percentUsed: ((totalUsageMB / DISK_LIMIT_MB) * 100).toFixed(1) + '%',
+          });
+          
+          // Emergency cleanup: remove oldest idle containers
+          const sortedByAge = Array.from(this.pool.entries())
+            .filter(([, instance]) => instance.status === 'ready')
+            .sort(([, a], [, b]) => a.lastUsed.getTime() - b.lastUsed.getTime());
+          
+          // Remove oldest 50%
+          const toRemove = sortedByAge.slice(0, Math.ceil(sortedByAge.length / 2));
+          logger.warn(`🧹 Emergency cleanup: removing ${toRemove.length} containers`);
+          
+          for (const [id] of toRemove) {
+            await this.removeContainer(id);
+          }
+          
+          // Prune unused images and volumes
+          await docker.pruneImages({ filters: { dangling: { true: true } } });
+          await docker.pruneVolumes();
+        }
+      } catch (error: any) {
+        logger.error('Disk saturation monitor error', { error: error.message });
+      }
+    }, 120000); // Check every 2 min
   }
 
   /**

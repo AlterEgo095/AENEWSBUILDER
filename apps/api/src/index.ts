@@ -35,6 +35,9 @@ async function bootstrap() {
     requestIdLogLabel: 'reqId',
     disableRequestLogging: false,
     requestIdHeader: 'x-request-id',
+    // 🔥 PAYLOAD BOMB PROTECTION
+    bodyLimit: 10 * 1024 * 1024, // Max 10MB (prevent JSON bombs)
+    maxParamLength: 500, // Max 500 chars per param
   });
 
   try {
@@ -66,12 +69,29 @@ async function bootstrap() {
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     });
 
-    // Rate Limiting (Redis-backed)
+    // Rate Limiting (Redis-backed) - 🔥 ENHANCED WITH DDoS PROTECTION
     await app.register(rateLimit, {
       max: config.rateLimit.maxRequests,
       timeWindow: config.rateLimit.windowMs,
       redis: await initRedis(),
       skipOnError: false,
+      // 🔥 BAN IP AFTER EXCESSIVE VIOLATIONS
+      ban: 10, // Ban after 10 violations
+      onBanReach: (req, key) => {
+        logger.error('🚨 IP BANNED - DDoS detected', {
+          ip: req.ip,
+          key,
+        });
+      },
+      // 🔥 CUSTOM ERROR RESPONSE
+      errorResponseBuilder: (req, context) => {
+        return {
+          error: 'Rate Limit Exceeded',
+          message: 'Too many requests, please slow down',
+          retryAfter: context.after,
+          limit: config.rateLimit.maxRequests,
+        };
+      },
     });
 
     // Compression
@@ -106,7 +126,7 @@ async function bootstrap() {
       },
     });
 
-    // JWT Decorator with Claims Validation
+    // JWT Decorator with Claims Validation + 🔥 TOKEN REVOCATION CHECK
     app.decorate('authenticate', async (request: any, reply: any) => {
       try {
         const decoded = await request.jwtVerify();
@@ -125,6 +145,13 @@ async function bootstrap() {
         // Validate audience (if configured)
         if (config.jwt.audience && decoded.aud !== config.jwt.audience) {
           throw new Error('Invalid token audience');
+        }
+        
+        // 🔥 CHECK TOKEN REVOCATION (Redis blacklist)
+        const redis = await initRedis();
+        const revoked = await redis.get(`revoked:token:${decoded.jti || decoded.sub}`);
+        if (revoked) {
+          throw new Error('Token revoked');
         }
         
         // Attach user info to request

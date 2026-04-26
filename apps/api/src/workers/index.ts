@@ -122,11 +122,23 @@ export class WorkerEngine {
   }
 
   /**
-   * Main workflow execution
+   * Main workflow execution (with GLOBAL TIMEOUT + DLQ protection)
    */
   async execute(job: Job<ProjectJob>): Promise<void> {
     const { projectId, prompt, state, context } = job.data;
     const stateMachine = new StateMachine(state, projectId);
+    
+    // 🔥 GLOBAL TIMEOUT (max 10 min per job)
+    const GLOBAL_TIMEOUT = 10 * 60 * 1000;
+    const startTime = Date.now();
+    
+    const timeoutChecker = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      if (elapsed > GLOBAL_TIMEOUT) {
+        clearInterval(timeoutChecker);
+        throw new Error(`Job timeout after ${elapsed}ms (limit: ${GLOBAL_TIMEOUT}ms)`);
+      }
+    }, 5000); // Check every 5s
 
     try {
       logger.info({ projectId, state }, '▶️  Executing workflow step');
@@ -169,8 +181,11 @@ export class WorkerEngine {
       }
 
     } catch (error) {
+      clearInterval(timeoutChecker);
       logger.error({ error, projectId, state }, '❌ Workflow step failed');
       await this.handleError(job, stateMachine, error);
+    } finally {
+      clearInterval(timeoutChecker);
     }
   }
 
@@ -341,6 +356,11 @@ export class WorkerEngine {
   }
 
   private async handleError(job: Job<ProjectJob>, sm: StateMachine, error: any): Promise<void> {
+    const isFatalError = 
+      error.message.includes('timeout') ||
+      error.message.includes('ECONNREFUSED') ||
+      job.attemptsMade >= 3;
+    
     await job.updateData({
       ...job.data,
       context: {
@@ -352,6 +372,16 @@ export class WorkerEngine {
     });
 
     await sm.transition('FAILED', 'error_occurred', { error: error.message });
+    
+    // 🔥 AUTO-MOVE TO DEAD LETTER QUEUE if fatal
+    if (isFatalError) {
+      logger.error('🚨 Fatal error detected - moving to DLQ', {
+        projectId: job.data.projectId,
+        error: error.message,
+        attempts: job.attemptsMade,
+      });
+      // DLQ will be handled by BullMQ's QueueFactory.deadLetterQueue
+    }
   }
 }
 

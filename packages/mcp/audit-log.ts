@@ -1,338 +1,226 @@
 /**
- * MCP Audit Log - Immutable Execution Trail
- * Features: Event Store integration, tamper-proof logs, forensic analysis
+ * MCP Audit Logging System
+ * Tracks all security events for compliance and forensics
  * @module mcp/audit-log
  */
 
-import { EventStoreV2, EventType } from '../../apps/api/src/workers/event-store-v2.js';
+import { PrismaClient } from '@prisma/client';
 import { logger } from '../../apps/api/src/config/logger.js';
-import crypto from 'crypto';
 
-// ================== AUDIT EVENT TYPES ==================
+const prisma = new PrismaClient();
 
 export enum AuditEventType {
-  TOOL_EXECUTION_STARTED = 'mcp:tool:execution:started',
-  TOOL_EXECUTION_COMPLETED = 'mcp:tool:execution:completed',
-  TOOL_EXECUTION_FAILED = 'mcp:tool:execution:failed',
-  TOOL_REGISTERED = 'mcp:tool:registered',
-  PERMISSION_DENIED = 'mcp:permission:denied',
-  RATE_LIMIT_EXCEEDED = 'mcp:rate_limit:exceeded',
-  COMMAND_BLOCKED = 'mcp:command:blocked',
-  INJECTION_DETECTED = 'mcp:injection:detected',
+  RATE_LIMIT_EXCEEDED = 'rate_limit_exceeded',
+  COMMAND_BLOCKED = 'command_blocked',
+  PERMISSION_DENIED = 'permission_denied',
+  TOOL_EXECUTION_START = 'tool_execution_start',
+  TOOL_EXECUTION_COMPLETE = 'tool_execution_complete',
+  TOOL_EXECUTION_FAILED = 'tool_execution_failed',
+  INJECTION_DETECTED = 'injection_detected',
+  FUZZING_DETECTED = 'fuzzing_detected',
 }
 
-export interface AuditEvent {
-  eventId: string;
-  timestamp: Date;
+export interface SecurityEvent {
   type: AuditEventType;
   toolId: string;
   userId?: string;
-  sessionId?: string;
-  data: Record<string, any>;
-  hash: string; // Tamper-proof hash of event
-  previousHash?: string; // Hash of previous event (blockchain-style)
+  reason: string;
+  data?: any;
 }
 
-// ================== AUDIT LOGGER ==================
+export interface ToolExecutionStart {
+  toolId: string;
+  userId?: string;
+  command: string[];
+  permissions: string[];
+}
+
+export interface ToolExecutionComplete {
+  eventId: string;
+  toolId: string;
+  userId?: string;
+  duration: number;
+  exitCode: number;
+  outputSize: number;
+}
+
+export interface ToolExecutionFailed {
+  eventId: string;
+  toolId: string;
+  userId?: string;
+  error: string;
+  duration: number;
+}
 
 export class AuditLogger {
-  private eventStore: EventStoreV2;
-  private lastEventHash?: string;
-
-  constructor() {
-    this.eventStore = new EventStoreV2();
-  }
-
   /**
-   * 🔥 LOG TOOL EXECUTION START
+   * Log security event
    */
-  async logToolExecutionStart(params: {
-    toolId: string;
-    userId?: string;
-    sessionId?: string;
-    command: string[];
-    permissions: string[];
-  }): Promise<string> {
-    const eventId = crypto.randomUUID();
-    
-    const auditEvent: AuditEvent = {
-      eventId,
-      timestamp: new Date(),
-      type: AuditEventType.TOOL_EXECUTION_STARTED,
-      toolId: params.toolId,
-      userId: params.userId,
-      sessionId: params.sessionId,
-      data: {
-        command: params.command,
-        permissions: params.permissions,
-      },
-      hash: '',
-      previousHash: this.lastEventHash,
-    };
-
-    auditEvent.hash = this.calculateHash(auditEvent);
-    this.lastEventHash = auditEvent.hash;
-
-    await this.eventStore.record({
-      type: EventType.MCP_TOOL_START,
-      projectId: params.toolId,
-      metadata: auditEvent,
-    });
-
-    logger.info('🔒 Audit: Tool execution started', {
-      eventId,
-      toolId: params.toolId,
-      userId: params.userId,
-    });
-
-    return eventId;
-  }
-
-  /**
-   * 🔥 LOG TOOL EXECUTION COMPLETION
-   */
-  async logToolExecutionComplete(params: {
-    eventId: string;
-    toolId: string;
-    userId?: string;
-    duration: number;
-    exitCode: number;
-    outputSize: number;
-  }): Promise<void> {
-    const auditEvent: AuditEvent = {
-      eventId: params.eventId,
-      timestamp: new Date(),
-      type: AuditEventType.TOOL_EXECUTION_COMPLETED,
-      toolId: params.toolId,
-      userId: params.userId,
-      data: {
-        duration: params.duration,
-        exitCode: params.exitCode,
-        outputSize: params.outputSize,
-      },
-      hash: '',
-      previousHash: this.lastEventHash,
-    };
-
-    auditEvent.hash = this.calculateHash(auditEvent);
-    this.lastEventHash = auditEvent.hash;
-
-    await this.eventStore.record({
-      type: EventType.MCP_TOOL_COMPLETE,
-      projectId: params.toolId,
-      metadata: auditEvent,
-    });
-
-    logger.info('🔒 Audit: Tool execution completed', {
-      eventId: params.eventId,
-      toolId: params.toolId,
-      duration: params.duration,
-    });
-  }
-
-  /**
-   * 🔥 LOG TOOL EXECUTION FAILURE
-   */
-  async logToolExecutionFailed(params: {
-    eventId: string;
-    toolId: string;
-    userId?: string;
-    error: string;
-    duration: number;
-  }): Promise<void> {
-    const auditEvent: AuditEvent = {
-      eventId: params.eventId,
-      timestamp: new Date(),
-      type: AuditEventType.TOOL_EXECUTION_FAILED,
-      toolId: params.toolId,
-      userId: params.userId,
-      data: {
-        error: params.error,
-        duration: params.duration,
-      },
-      hash: '',
-      previousHash: this.lastEventHash,
-    };
-
-    auditEvent.hash = this.calculateHash(auditEvent);
-    this.lastEventHash = auditEvent.hash;
-
-    await this.eventStore.record({
-      type: EventType.MCP_TOOL_ERROR,
-      projectId: params.toolId,
-      metadata: auditEvent,
-    });
-
-    logger.error('🔒 Audit: Tool execution failed', {
-      eventId: params.eventId,
-      toolId: params.toolId,
-      error: params.error,
-    });
-  }
-
-  /**
-   * 🔥 LOG SECURITY EVENT (permission denied, rate limit, etc.)
-   */
-  async logSecurityEvent(params: {
-    type: AuditEventType;
-    toolId: string;
-    userId?: string;
-    reason: string;
-    data?: Record<string, any>;
-  }): Promise<void> {
-    const eventId = crypto.randomUUID();
-    
-    const auditEvent: AuditEvent = {
-      eventId,
-      timestamp: new Date(),
-      type: params.type,
-      toolId: params.toolId,
-      userId: params.userId,
-      data: {
-        reason: params.reason,
-        ...params.data,
-      },
-      hash: '',
-      previousHash: this.lastEventHash,
-    };
-
-    auditEvent.hash = this.calculateHash(auditEvent);
-    this.lastEventHash = auditEvent.hash;
-
-    let eventType: EventType;
-    switch (params.type) {
-      case AuditEventType.PERMISSION_DENIED:
-        eventType = EventType.ERROR;
-        break;
-      case AuditEventType.RATE_LIMIT_EXCEEDED:
-        eventType = EventType.ERROR;
-        break;
-      case AuditEventType.COMMAND_BLOCKED:
-        eventType = EventType.ERROR;
-        break;
-      case AuditEventType.INJECTION_DETECTED:
-        eventType = EventType.ERROR;
-        break;
-      default:
-        eventType = EventType.ERROR;
-    }
-
-    await this.eventStore.record({
-      type: eventType,
-      projectId: params.toolId,
-      metadata: auditEvent,
-    });
-
-    logger.warn('🔒 Audit: Security event', {
-      eventId,
-      type: params.type,
-      toolId: params.toolId,
-      reason: params.reason,
-    });
-  }
-
-  /**
-   * 🔥 CALCULATE TAMPER-PROOF HASH
-   */
-  private calculateHash(event: Omit<AuditEvent, 'hash'>): string {
-    const payload = {
-      eventId: event.eventId,
-      timestamp: event.timestamp.toISOString(),
-      type: event.type,
-      toolId: event.toolId,
-      userId: event.userId,
-      sessionId: event.sessionId,
-      data: event.data,
-      previousHash: event.previousHash,
-    };
-
-    return crypto
-      .createHash('sha256')
-      .update(JSON.stringify(payload))
-      .digest('hex');
-  }
-
-  /**
-   * 🔥 VERIFY AUDIT TRAIL INTEGRITY
-   */
-  async verifyIntegrity(events: AuditEvent[]): Promise<{
-    valid: boolean;
-    brokenChain?: number;
-  }> {
-    if (events.length === 0) return { valid: true };
-
-    for (let i = 1; i < events.length; i++) {
-      const currentEvent = events[i];
-      const previousEvent = events[i - 1];
-
-      // Verify hash chain
-      if (currentEvent.previousHash !== previousEvent.hash) {
-        logger.error('🚨 Audit trail integrity violation detected', {
-          eventIndex: i,
-          eventId: currentEvent.eventId,
-          expectedPreviousHash: previousEvent.hash,
-          actualPreviousHash: currentEvent.previousHash,
-        });
-
-        return {
-          valid: false,
-          brokenChain: i,
-        };
-      }
-
-      // Verify hash calculation
-      const recalculatedHash = this.calculateHash({
-        eventId: currentEvent.eventId,
-        timestamp: currentEvent.timestamp,
-        type: currentEvent.type,
-        toolId: currentEvent.toolId,
-        userId: currentEvent.userId,
-        sessionId: currentEvent.sessionId,
-        data: currentEvent.data,
-        previousHash: currentEvent.previousHash,
+  async logSecurityEvent(event: SecurityEvent): Promise<string> {
+    try {
+      const record = await prisma.securityAudit.create({
+        data: {
+          type: event.type,
+          toolId: event.toolId,
+          userId: event.userId || 'system',
+          reason: event.reason,
+          data: event.data || {},
+          timestamp: new Date(),
+        },
       });
 
-      if (recalculatedHash !== currentEvent.hash) {
-        logger.error('🚨 Audit event hash mismatch - tampering detected', {
-          eventIndex: i,
-          eventId: currentEvent.eventId,
-          expectedHash: currentEvent.hash,
-          recalculatedHash,
-        });
+      logger.warn('🔒 Security event logged', {
+        id: record.id,
+        type: event.type,
+        toolId: event.toolId,
+      });
 
-        return {
-          valid: false,
-          brokenChain: i,
-        };
-      }
+      return record.id;
+    } catch (error: any) {
+      logger.error('Failed to log security event', {
+        error: error.message,
+        event,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Log tool execution start
+   */
+  async logToolExecutionStart(execution: ToolExecutionStart): Promise<string> {
+    try {
+      const record = await prisma.toolExecution.create({
+        data: {
+          toolId: execution.toolId,
+          userId: execution.userId || 'system',
+          command: execution.command,
+          permissions: execution.permissions,
+          status: 'running',
+          startedAt: new Date(),
+        },
+      });
+
+      logger.info('Tool execution started', {
+        id: record.id,
+        toolId: execution.toolId,
+      });
+
+      return record.id;
+    } catch (error: any) {
+      logger.error('Failed to log tool execution start', {
+        error: error.message,
+        execution,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Log tool execution complete
+   */
+  async logToolExecutionComplete(execution: ToolExecutionComplete): Promise<void> {
+    try {
+      await prisma.toolExecution.update({
+        where: { id: execution.eventId },
+        data: {
+          status: 'completed',
+          exitCode: execution.exitCode,
+          outputSize: execution.outputSize,
+          duration: execution.duration,
+          completedAt: new Date(),
+        },
+      });
+
+      logger.info('Tool execution completed', {
+        id: execution.eventId,
+        duration: execution.duration,
+        exitCode: execution.exitCode,
+      });
+    } catch (error: any) {
+      logger.error('Failed to log tool execution complete', {
+        error: error.message,
+        execution,
+      });
+    }
+  }
+
+  /**
+   * Log tool execution failed
+   */
+  async logToolExecutionFailed(execution: ToolExecutionFailed): Promise<void> {
+    try {
+      await prisma.toolExecution.update({
+        where: { id: execution.eventId },
+        data: {
+          status: 'failed',
+          error: execution.error,
+          duration: execution.duration,
+          completedAt: new Date(),
+        },
+      });
+
+      logger.error('Tool execution failed', {
+        id: execution.eventId,
+        error: execution.error,
+      });
+    } catch (error: any) {
+      logger.error('Failed to log tool execution failure', {
+        error: error.message,
+        execution,
+      });
+    }
+  }
+
+  /**
+   * Query security events
+   */
+  async querySecurityEvents(filter: {
+    toolId?: string;
+    userId?: string;
+    types?: AuditEventType[];
+    from?: Date;
+    to?: Date;
+    limit?: number;
+  }) {
+    const where: any = {};
+
+    if (filter.toolId) where.toolId = filter.toolId;
+    if (filter.userId) where.userId = filter.userId;
+    if (filter.types) where.type = { in: filter.types };
+    if (filter.from || filter.to) {
+      where.timestamp = {};
+      if (filter.from) where.timestamp.gte = filter.from;
+      if (filter.to) where.timestamp.lte = filter.to;
     }
 
-    return { valid: true };
+    return prisma.securityAudit.findMany({
+      where,
+      orderBy: { timestamp: 'desc' },
+      take: filter.limit || 100,
+    });
   }
 
   /**
-   * 🔥 FORENSIC QUERY: Get all events for a tool
+   * Get security statistics
    */
-  async getToolAuditTrail(toolId: string, limit = 100): Promise<AuditEvent[]> {
-    // Note: This would query the Event Store V2 PostgreSQL database
-    // For now, we return empty array as placeholder
-    logger.info('Querying audit trail', { toolId, limit });
-    return [];
-  }
+  async getStats(toolId?: string) {
+    const where = toolId ? { toolId } : {};
 
-  /**
-   * 🔥 FORENSIC QUERY: Get all security events
-   */
-  async getSecurityEvents(
-    startDate?: Date,
-    endDate?: Date,
-    limit = 100
-  ): Promise<AuditEvent[]> {
-    logger.info('Querying security events', { startDate, endDate, limit });
-    return [];
+    const [total, byType] = await Promise.all([
+      prisma.securityAudit.count({ where }),
+      prisma.securityAudit.groupBy({
+        by: ['type'],
+        where,
+        _count: true,
+      }),
+    ]);
+
+    return {
+      total,
+      byType: Object.fromEntries(byType.map((t) => [t.type, t._count])),
+    };
   }
 }
 
 export const auditLogger = new AuditLogger();
-
-logger.info('✅ MCP Audit Logger initialized');
