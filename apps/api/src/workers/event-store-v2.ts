@@ -42,6 +42,11 @@ class EventStoreV2 {
   private readonly STREAM_KEY = 'workflow:events:v2';
   private readonly CHANNEL_PREFIX = 'events:';
   private readonly MAX_STREAM_LENGTH = 100000;
+  
+  // 🔥 STREAM CORRUPTION DETECTION
+  private lastStreamId: string | null = null;
+  private corruptionDetected = false;
+  private healthCheckInterval?: NodeJS.Timeout;
 
   constructor() {
     // Main Redis connection
@@ -69,6 +74,7 @@ class EventStoreV2 {
     this.emitter.setMaxListeners(100);
 
     this.setupSubscriptions();
+    this.startStreamHealthCheck(); // 🔥 NEW
   }
 
   /**
@@ -98,6 +104,22 @@ class EventStoreV2 {
    * Store event in both Redis (fast) and PostgreSQL (durable)
    */
   async store(event: WorkflowEventV2): Promise<string> {
+    // 🔥 CHECK STREAM HEALTH FIRST
+    if (this.corruptionDetected) {
+      logger.error('❌ Event Store corrupted - using PostgreSQL fallback only');
+      // Fallback to PostgreSQL only
+      await this.persistToDatabase({
+        ...event,
+        timestamp: event.timestamp || new Date(),
+        metadata: {
+          correlationId: event.metadata?.correlationId || this.generateId(),
+          causationId: event.metadata?.causationId,
+          version: event.metadata?.version || 1,
+        },
+      });
+      return 'pg-' + this.generateId();
+    }
+    
     const enrichedEvent = {
       ...event,
       timestamp: event.timestamp || new Date(),
@@ -109,6 +131,11 @@ class EventStoreV2 {
     };
 
     const eventJson = JSON.stringify(enrichedEvent);
+    
+    // 🔥 ADD CHECKSUM FOR INTEGRITY
+    const crypto = await import('crypto');
+    const checksum = crypto.createHash('sha256').update(eventJson).digest('hex');
+    const eventWithChecksum = JSON.stringify({ ...enrichedEvent, _checksum: checksum });
 
     try {
       // 1. Add to Redis Stream (fast, real-time)
@@ -116,8 +143,11 @@ class EventStoreV2 {
         this.STREAM_KEY,
         '*',
         'data',
-        eventJson
+        eventWithChecksum
       );
+      
+      // 🔥 TRACK LAST STREAM ID
+      this.lastStreamId = streamId;
 
       // 2. Publish to Redis Pub/Sub (real-time notifications)
       await this.pubRedis.publish(
@@ -327,6 +357,10 @@ class EventStoreV2 {
    * Close all connections
    */
   async close() {
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+    }
+    
     await Promise.all([
       this.redis.quit(),
       this.pubRedis.quit(),
@@ -337,6 +371,101 @@ class EventStoreV2 {
     this.emitter.removeAllListeners();
 
     logger.info('Event Store V2 closed');
+  }
+  
+  /**
+   * 🔥 STREAM HEALTH CHECK (detect corruption)
+   */
+  private startStreamHealthCheck() {
+    this.healthCheckInterval = setInterval(async () => {
+      try {
+        // Check stream length
+        const streamInfo = await this.redis.xinfo('STREAM', this.STREAM_KEY);
+        const length = streamInfo[1] as number; // ["length", N]
+        
+        if (length > this.MAX_STREAM_LENGTH * 1.2) {
+          logger.error('🚨 STREAM CORRUPTION: Length exceeded threshold', {
+            length,
+            maxLength: this.MAX_STREAM_LENGTH,
+          });
+          this.corruptionDetected = true;
+          
+          // Auto-recovery: rebuild stream from PostgreSQL
+          await this.recoverStream();
+        }
+        
+        // Check last stream ID continuity
+        if (this.lastStreamId) {
+          const lastEntry = await this.redis.xrevrange(this.STREAM_KEY, '+', '-', 'COUNT', 1);
+          if (lastEntry.length > 0) {
+            const currentLastId = lastEntry[0][0];
+            
+            // Verify checksum of last entry
+            const data = JSON.parse(lastEntry[0][1][1] as string);
+            if (data._checksum) {
+              const { _checksum, ...eventData } = data;
+              const crypto = await import('crypto');
+              const expectedChecksum = crypto.createHash('sha256')
+                .update(JSON.stringify(eventData))
+                .digest('hex');
+              
+              if (_checksum !== expectedChecksum) {
+                logger.error('🚨 CHECKSUM MISMATCH: Event corrupted', {
+                  streamId: currentLastId,
+                });
+                this.corruptionDetected = true;
+                await this.recoverStream();
+              }
+            }
+          }
+        }
+      } catch (error: any) {
+        logger.error('Stream health check failed', { error: error.message });
+      }
+    }, 30000); // Check every 30s
+  }
+  
+  /**
+   * 🔥 RECOVER STREAM from PostgreSQL
+   */
+  private async recoverStream() {
+    logger.warn('🔧 Starting stream recovery from PostgreSQL...');
+    
+    try {
+      // Delete corrupted stream
+      await this.redis.del(this.STREAM_KEY);
+      
+      // Rebuild from last 10k events in PostgreSQL
+      const events = await this.prisma.event.findMany({
+        orderBy: { timestamp: 'desc' },
+        take: 10000,
+      });
+      
+      logger.info(`Restoring ${events.length} events from PostgreSQL...`);
+      
+      for (const event of events.reverse()) {
+        const eventData = {
+          type: event.type,
+          projectId: event.projectId,
+          userId: event.userId,
+          data: event.data,
+          timestamp: event.timestamp,
+          metadata: event.metadata,
+        };
+        
+        const eventJson = JSON.stringify(eventData);
+        const crypto = await import('crypto');
+        const checksum = crypto.createHash('sha256').update(eventJson).digest('hex');
+        const eventWithChecksum = JSON.stringify({ ...eventData, _checksum: checksum });
+        
+        await this.redis.xadd(this.STREAM_KEY, '*', 'data', eventWithChecksum);
+      }
+      
+      this.corruptionDetected = false;
+      logger.info('✅ Stream recovery completed');
+    } catch (error: any) {
+      logger.error('Stream recovery failed', { error: error.message });
+    }
   }
 
   private generateId(): string {
