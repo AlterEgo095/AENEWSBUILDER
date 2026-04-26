@@ -1,713 +1,697 @@
 /**
- * ███████╗ █████╗ ███╗   ██╗██████╗ ██████╗  ██████╗ ██╗  ██╗    ██╗    ██╗ █████╗ ██████╗ ███╗   ███╗
- * ██╔════╝██╔══██╗████╗  ██║██╔══██╗██╔══██╗██╔═══██╗╚██╗██╔╝    ██║    ██║██╔══██╗██╔══██╗████╗ ████║
- * ███████╗███████║██╔██╗ ██║██║  ██║██████╔╝██║   ██║ ╚███╔╝     ██║ █╗ ██║███████║██████╔╝██╔████╔██║
- * ╚════██║██╔══██║██║╚██╗██║██║  ██║██╔══██╗██║   ██║ ██╔██╗     ██║███╗██║██╔══██║██╔══██╗██║╚██╔╝██║
- * ███████║██║  ██║██║ ╚████║██████╔╝██████╔╝╚██████╔╝██╔╝ ██╗    ╚███╔███╔╝██║  ██║██║  ██║██║ ╚═╝ ██║
- * ╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝     ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ * 🐳 SANDBOX WARM POOL - Production Hardened
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  * 
- * POOL - Production Hardened v3.0
+ * AMÉLIORATIONS CRITIQUES vs V1 :
+ * ✅ Auto-healing avec health checks actifs (toutes les 30s)
+ * ✅ Container lifecycle management complet (create → ready → active → idle → destroy)
+ * ✅ Memory leak detection (détruit containers > 500MB)
+ * ✅ Network isolation stricte (--network=none vérifiée)
+ * ✅ Resource limits enforcement (CPU 0.5, Memory 512MB, Disk 1GB)
+ * ✅ Graceful recycling (warm containers expirés après 1h)
+ * ✅ Circuit breaker Docker (protection contre daemon crashes)
+ * ✅ Métriques Prometheus complètes
+ * ✅ Container fingerprinting (détecte les compromissions)
+ * ✅ Auto-scaling basé sur la demande
  * 
- * ✅ HARDENING FEATURES:
- * - Predictive Scaling (ARIMA-like load forecasting)
- * - Advanced Saturation Metrics (queue depth, wait time, rejection rate)
- * - Proactive Health Checks with cgroups verification
- * - Runtime Network Isolation Verification
- * - Container Recycling with Memory Leak Detection (dynamic thresholds)
- * - Circuit Breaker for Docker daemon failures
- * - Zombie Container Killer
- * - Disk Saturation Prevention
- * - Graceful Degradation (waiting queue)
- * 
- * @author Dieudonneé MATANDA (ALTER EGO)
- * @version 3.0.0-hardened
- * @license MIT
+ * @version 2.0.0 - Enterprise Grade
  */
 
-import Docker from 'dockerode';
-import { EventEmitter } from 'events';
-import { Mutex } from 'async-mutex';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import { logger } from '../config/logger.js';
-import { metrics } from '../observability/metrics.js';
+import Docker, { Container, ContainerCreateOptions } from 'dockerode';
+import { logger } from '../config/logger';
+import { metricsService } from '../observability/metrics';
+import * as Sentry from '@sentry/node';
 
-const execAsync = promisify(exec);
-const docker = new Docker();
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 📋 TYPES & INTERFACES
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 🔧 TYPES & INTERFACES
-// ═══════════════════════════════════════════════════════════════════════════
-
-export interface SandboxConfig {
-  template: 'react' | 'next' | 'express' | 'python' | 'node';
-  memory?: string;
-  cpus?: number;
-  timeout?: number;
-  networkMode?: 'none' | 'bridge' | 'host';
-}
-
-export interface SandboxInstance {
+interface WarmContainer {
   id: string;
-  container: Docker.Container;
-  config: SandboxConfig;
-  status: 'warming' | 'ready' | 'busy' | 'cleanup';
+  container: Container;
+  state: 'ready' | 'active' | 'idle' | 'unhealthy' | 'terminating';
   createdAt: Date;
-  lastUsed: Date;
-  executions: number;
-  memoryBaseline: number; // Initial memory usage (for leak detection)
+  lastUsedAt: Date;
+  lastHealthCheck: Date;
+  healthCheckFailures: number;
+  memoryUsageMB: number;
+  cpuUsagePercent: number;
+  executionCount: number;
+  fingerprint: string; // SHA256 of /etc/passwd + /bin/sh
 }
 
-export interface PoolMetrics {
-  total: number;
-  available: number;
-  busy: number;
-  queueDepth: number;
-  avgWaitTimeMs: number;
-  rejectionRate: number;
-  saturationPercent: number;
-  predictedDemand: number;
+interface ContainerStats {
+  memoryUsageMB: number;
+  cpuUsagePercent: number;
+  networkIsolated: boolean;
+  diskUsageMB: number;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 📊 LOAD FORECASTER (Predictive Scaling)
-// ═══════════════════════════════════════════════════════════════════════════
-
-class LoadForecaster {
-  private history: Array<{ timestamp: number; demand: number }> = [];
-  private readonly HISTORY_SIZE = 100; // Last 100 data points
-  private readonly WINDOW_SIZE = 10; // Moving average window
-
-  recordDemand(demand: number): void {
-    this.history.push({ timestamp: Date.now(), demand });
-    if (this.history.length > this.HISTORY_SIZE) {
-      this.history.shift();
-    }
-  }
-
-  /**
-   * Simple ARIMA-like prediction using exponential moving average
-   */
-  predictDemand(): number {
-    if (this.history.length < this.WINDOW_SIZE) {
-      return 0; // Not enough data
-    }
-
-    const recent = this.history.slice(-this.WINDOW_SIZE);
-    const sum = recent.reduce((acc, { demand }) => acc + demand, 0);
-    const avg = sum / this.WINDOW_SIZE;
-
-    // Calculate trend
-    const firstHalf = recent.slice(0, this.WINDOW_SIZE / 2);
-    const secondHalf = recent.slice(this.WINDOW_SIZE / 2);
-    const firstAvg = firstHalf.reduce((acc, { demand }) => acc + demand, 0) / firstHalf.length;
-    const secondAvg = secondHalf.reduce((acc, { demand }) => acc + demand, 0) / secondHalf.length;
-    const trend = secondAvg - firstAvg;
-
-    // Predict next value: average + trend
-    const prediction = avg + trend;
-
-    return Math.max(0, Math.round(prediction));
-  }
+interface WarmPoolConfig {
+  minSize: number; // Minimum warm containers
+  maxSize: number; // Maximum warm containers
+  maxIdleTime: number; // Max idle time before recycling (ms)
+  maxLifetime: number; // Max container lifetime (ms)
+  maxExecutions: number; // Max executions per container
+  healthCheckInterval: number; // Health check interval (ms)
+  maxMemoryMB: number; // Max memory per container
+  maxCpuPercent: number; // Max CPU % per container
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 🏊 SANDBOX WARM POOL (Hardened)
-// ═══════════════════════════════════════════════════════════════════════════
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🏗️ WARM POOL CLASS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-export class SandboxWarmPool extends EventEmitter {
-  private pool: Map<string, SandboxInstance> = new Map();
-  private templates: Map<string, Docker.Image> = new Map();
-  private acquireMutex = new Mutex();
-  private dockerHealthy = true;
-  private healthCheckInterval?: NodeJS.Timeout;
+export class SandboxWarmPool {
+  private docker: Docker;
+  private pool: Map<string, WarmContainer> = new Map();
+  private healthCheckInterval: NodeJS.Timeout | null = null;
+  private recyclingInterval: NodeJS.Timeout | null = null;
+  private autoScalingInterval: NodeJS.Timeout | null = null;
+  private circuitBreakerFailures = 0;
+  private circuitBreakerState: 'CLOSED' | 'OPEN' = 'CLOSED';
 
-  // Circuit Breaker
-  private circuitBreaker = {
-    failures: 0,
-    lastFailure: 0,
-    state: 'closed' as 'open' | 'half-open' | 'closed',
+  private config: WarmPoolConfig = {
+    minSize: parseInt(process.env.WARM_POOL_MIN_SIZE || '5'),
+    maxSize: parseInt(process.env.WARM_POOL_MAX_SIZE || '20'),
+    maxIdleTime: 3600000, // 1 hour
+    maxLifetime: 7200000, // 2 hours
+    maxExecutions: 50,
+    healthCheckInterval: 30000, // 30s
+    maxMemoryMB: 512,
+    maxCpuPercent: 50,
   };
-  private readonly CIRCUIT_BREAKER_THRESHOLD = 5;
-  private readonly CIRCUIT_BREAKER_TIMEOUT = 30000;
 
-  // Waiting Queue (graceful degradation)
-  private waitingQueue: Array<{
-    config: SandboxConfig;
-    resolve: Function;
-    reject: Function;
-    enqueuedAt: number;
-  }> = [];
-
-  // Metrics tracking
-  private requestCount = 0;
-  private rejectionCount = 0;
-  private waitTimes: number[] = [];
-  private loadForecaster = new LoadForecaster();
-
-  // Pool configuration
-  private readonly MIN_POOL_SIZE = 3;
-  private readonly MAX_POOL_SIZE = 50;
-  private readonly IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
-  private readonly MAX_EXECUTIONS_PER_CONTAINER = 50;
-  private readonly MAX_MEMORY_GROWTH_PERCENT = 50; // 50% growth = leak
-  private readonly ISOLATED_NETWORK = 'sandbox-isolated';
+  private readonly CONTAINER_IMAGE = process.env.SANDBOX_IMAGE || 'node:18-alpine';
+  private readonly RESOURCE_LIMITS = {
+    memory: 512 * 1024 * 1024, // 512MB
+    memorySwap: 512 * 1024 * 1024,
+    cpuQuota: 50000, // 0.5 CPU
+    cpuPeriod: 100000,
+    pidsLimit: 100,
+    diskQuotaMB: 1024, // 1GB
+  };
 
   constructor() {
-    super();
+    this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
     this.initialize();
-    this.startDockerHealthCheck();
-    this.startMemoryLeakDetector();
-    this.startZombieKiller();
-    this.startDiskSaturationMonitor();
-    this.startProactiveScaling(); // 🔥 NEW
-    this.startNetworkIsolationVerifier(); // 🔥 NEW
   }
 
-  /**
-   * 🔥 PROACTIVE SCALING (Predictive)
-   */
-  private startProactiveScaling(): void {
-    setInterval(() => {
-      const currentLoad = this.pool.size;
-      const busyContainers = Array.from(this.pool.values()).filter((i) => i.status === 'busy').length;
-      const demand = busyContainers + this.waitingQueue.length;
+  // ═══════════════════════════════════════════════════════════════
+  // 🚀 INITIALIZATION
+  // ═══════════════════════════════════════════════════════════════
 
-      this.loadForecaster.recordDemand(demand);
-      const predictedDemand = this.loadForecaster.predictDemand();
+  private async initialize(): Promise<void> {
+    logger.info('Initializing Sandbox Warm Pool', this.config);
 
-      logger.debug('[WarmPool] Load forecast', {
-        current: currentLoad,
-        busy: busyContainers,
-        queue: this.waitingQueue.length,
-        predicted: predictedDemand,
+    try {
+      // Pull image if not present
+      await this.ensureImage();
+
+      // Warm up initial pool
+      await this.warmUp();
+
+      // Start background jobs
+      this.startHealthChecks();
+      this.startRecycling();
+      this.startAutoScaling();
+
+      logger.info('Warm Pool initialized successfully', {
+        poolSize: this.pool.size,
       });
 
-      // Scale up proactively if predicted demand > 80% of pool
-      if (predictedDemand > currentLoad * 0.8 && currentLoad < this.MAX_POOL_SIZE) {
-        const toAdd = Math.min(predictedDemand - currentLoad, this.MAX_POOL_SIZE - currentLoad);
-        logger.info(`[WarmPool] 🚀 Proactive scaling: adding ${toAdd} containers`);
-        this.warmPool();
-      }
-
-      // Scale down if idle > 50%
-      const idlePercent = ((currentLoad - busyContainers) / currentLoad) * 100;
-      if (idlePercent > 50 && currentLoad > this.MIN_POOL_SIZE) {
-        logger.info(`[WarmPool] 🔽 Scaling down: ${idlePercent.toFixed(1)}% idle`);
-        this.removeIdleContainers();
-      }
-    }, 30000); // Check every 30s
+    } catch (error: any) {
+      logger.error('Warm Pool initialization failed', { error: error.message });
+      Sentry.captureException(error);
+      throw error;
+    }
   }
 
-  /**
-   * 🔥 NETWORK ISOLATION VERIFICATION (Runtime Check)
-   */
-  private startNetworkIsolationVerifier(): void {
-    setInterval(async () => {
-      for (const instance of this.pool.values()) {
-        try {
-          // Verify container cannot reach external network
-          const exec = await instance.container.exec({
-            Cmd: ['ping', '-c', '1', '-W', '1', '8.8.8.8'],
-            AttachStdout: true,
-            AttachStderr: true,
-          });
-
-          const stream = await exec.start({ Detach: false });
-          let output = '';
-          stream.on('data', (chunk) => (output += chunk.toString()));
-
-          await new Promise((resolve) => stream.on('end', resolve));
-
-          // If ping succeeds, network isolation is BROKEN
-          if (output.includes('1 received') || output.includes('1 packets transmitted, 1 received')) {
-            logger.error('[WarmPool] 🚨 NETWORK ISOLATION BREACH', {
-              containerId: instance.id,
-              output,
-            });
-
-            // Force destroy compromised container
-            await this.removeContainer(instance.id);
-            metrics.sandboxSecurityBreaches.inc({ type: 'network_isolation' });
-          }
-        } catch (error: any) {
-          // Expected: ping should fail (network isolated)
-          logger.debug('[WarmPool] Network isolation verified', { containerId: instance.id });
-        }
-      }
-    }, 60000); // Check every 1 min
+  private async ensureImage(): Promise<void> {
+    try {
+      await this.docker.getImage(this.CONTAINER_IMAGE).inspect();
+      logger.info('Docker image already present', { image: this.CONTAINER_IMAGE });
+    } catch {
+      logger.info('Pulling Docker image', { image: this.CONTAINER_IMAGE });
+      await this.docker.pull(this.CONTAINER_IMAGE);
+    }
   }
 
-  /**
-   * 🔥 ADVANCED MEMORY LEAK DETECTOR (Dynamic Thresholds)
-   */
-  private startMemoryLeakDetector(): void {
-    setInterval(async () => {
-      for (const instance of this.pool.values()) {
+  // ═══════════════════════════════════════════════════════════════
+  // 🔥 WARM UP POOL
+  // ═══════════════════════════════════════════════════════════════
+
+  private async warmUp(): Promise<void> {
+    const createPromises = [];
+
+    for (let i = 0; i < this.config.minSize; i++) {
+      createPromises.push(this.createWarmContainer());
+    }
+
+    await Promise.allSettled(createPromises);
+    
+    const successCount = Array.from(this.pool.values()).filter(
+      c => c.state === 'ready'
+    ).length;
+
+    logger.info('Warm-up complete', {
+      target: this.config.minSize,
+      success: successCount,
+      failed: this.config.minSize - successCount,
+    });
+
+    metricsService.setSandboxWarmPoolSize(this.pool.size);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🏗️ CREATE WARM CONTAINER
+  // ═══════════════════════════════════════════════════════════════
+
+  private async createWarmContainer(): Promise<WarmContainer> {
+    if (this.circuitBreakerState === 'OPEN') {
+      throw new Error('Circuit breaker OPEN - Docker daemon is unhealthy');
+    }
+
+    try {
+      const containerOptions: ContainerCreateOptions = {
+        Image: this.CONTAINER_IMAGE,
+        Cmd: ['/bin/sh', '-c', 'trap exit TERM; while :; do sleep 1; done'],
+        AttachStdin: false,
+        AttachStdout: false,
+        AttachStderr: false,
+        Tty: false,
+        OpenStdin: false,
+        
+        // Network isolation (stricte)
+        NetworkMode: 'none',
+        NetworkDisabled: true,
+
+        // Resource limits
+        HostConfig: {
+          Memory: this.RESOURCE_LIMITS.memory,
+          MemorySwap: this.RESOURCE_LIMITS.memorySwap,
+          CpuQuota: this.RESOURCE_LIMITS.cpuQuota,
+          CpuPeriod: this.RESOURCE_LIMITS.cpuPeriod,
+          PidsLimit: this.RESOURCE_LIMITS.pidsLimit,
+          
+          // Security
+          CapDrop: ['ALL'],
+          ReadonlyRootfs: false, // Need writable /tmp
+          SecurityOpt: ['no-new-privileges'],
+          
+          // Storage limit
+          StorageOpt: {
+            size: `${this.RESOURCE_LIMITS.diskQuotaMB}M`,
+          },
+        },
+
+        Labels: {
+          'aenews.pool': 'warm',
+          'aenews.created': new Date().toISOString(),
+        },
+      };
+
+      const container = await this.docker.createContainer(containerOptions);
+      await container.start();
+
+      // Generate fingerprint
+      const fingerprint = await this.generateFingerprint(container);
+
+      const warmContainer: WarmContainer = {
+        id: container.id,
+        container,
+        state: 'ready',
+        createdAt: new Date(),
+        lastUsedAt: new Date(),
+        lastHealthCheck: new Date(),
+        healthCheckFailures: 0,
+        memoryUsageMB: 0,
+        cpuUsagePercent: 0,
+        executionCount: 0,
+        fingerprint,
+      };
+
+      this.pool.set(container.id, warmContainer);
+      metricsService.incrementSandboxContainersCreated();
+      metricsService.setSandboxWarmPoolSize(this.pool.size);
+
+      logger.debug('Warm container created', {
+        id: container.id.substring(0, 12),
+        fingerprint,
+      });
+
+      return warmContainer;
+
+    } catch (error: any) {
+      this.handleDockerFailure(error);
+      throw error;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🎯 ACQUIRE CONTAINER (from pool)
+  // ═══════════════════════════════════════════════════════════════
+
+  async acquire(): Promise<WarmContainer> {
+    // Find ready container
+    let warmContainer = Array.from(this.pool.values()).find(
+      c => c.state === 'ready'
+    );
+
+    // No ready container, create new one (if under max)
+    if (!warmContainer) {
+      if (this.pool.size < this.config.maxSize) {
+        warmContainer = await this.createWarmContainer();
+      } else {
+        throw new Error('Warm pool exhausted - all containers in use');
+      }
+    }
+
+    // Mark as active
+    warmContainer.state = 'active';
+    warmContainer.lastUsedAt = new Date();
+    warmContainer.executionCount++;
+
+    metricsService.setSandboxActiveContainers(
+      Array.from(this.pool.values()).filter(c => c.state === 'active').length
+    );
+
+    logger.debug('Container acquired', {
+      id: warmContainer.id.substring(0, 12),
+      executions: warmContainer.executionCount,
+    });
+
+    return warmContainer;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🔄 RELEASE CONTAINER (back to pool)
+  // ═══════════════════════════════════════════════════════════════
+
+  async release(containerId: string): Promise<void> {
+    const warmContainer = this.pool.get(containerId);
+    
+    if (!warmContainer) {
+      logger.warn('Attempted to release unknown container', { containerId });
+      return;
+    }
+
+    // Check if should recycle
+    const shouldRecycle = this.shouldRecycle(warmContainer);
+
+    if (shouldRecycle) {
+      await this.destroyContainer(containerId, 'max_lifetime_reached');
+      // Create replacement
+      this.createWarmContainer().catch(err => {
+        logger.error('Failed to create replacement container', { error: err.message });
+      });
+    } else {
+      // Return to pool
+      warmContainer.state = 'ready';
+      warmContainer.lastUsedAt = new Date();
+
+      logger.debug('Container released', {
+        id: containerId.substring(0, 12),
+        executions: warmContainer.executionCount,
+      });
+    }
+
+    metricsService.setSandboxActiveContainers(
+      Array.from(this.pool.values()).filter(c => c.state === 'active').length
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🩺 HEALTH CHECKS (active monitoring)
+  // ═══════════════════════════════════════════════════════════════
+
+  private startHealthChecks(): void {
+    this.healthCheckInterval = setInterval(async () => {
+      const containers = Array.from(this.pool.values());
+
+      for (const warmContainer of containers) {
         try {
-          const stats = await instance.container.stats({ stream: false });
-          const currentMemory = stats.memory_stats.usage || 0;
-          const memoryLimit = stats.memory_stats.limit || Infinity;
-
-          // Calculate growth from baseline
-          const growthPercent = instance.memoryBaseline
-            ? ((currentMemory - instance.memoryBaseline) / instance.memoryBaseline) * 100
-            : 0;
-
-          logger.debug('[WarmPool] Memory check', {
-            containerId: instance.id.substring(0, 12),
-            currentMB: (currentMemory / 1024 / 1024).toFixed(2),
-            baselineMB: (instance.memoryBaseline / 1024 / 1024).toFixed(2),
-            growthPercent: growthPercent.toFixed(1),
-          });
-
-          // Leak detected: >50% growth OR >90% of limit
-          const usagePercent = (currentMemory / memoryLimit) * 100;
-          if (growthPercent > this.MAX_MEMORY_GROWTH_PERCENT || usagePercent > 90) {
-            logger.warn('[WarmPool] 💧 MEMORY LEAK DETECTED - recycling', {
-              containerId: instance.id.substring(0, 12),
-              growthPercent: growthPercent.toFixed(1),
-              usagePercent: usagePercent.toFixed(1),
-            });
-
-            await this.removeContainer(instance.id);
-            metrics.sandboxMemoryLeaks.inc();
-            this.warmPool(); // Replace immediately
-          }
+          await this.healthCheck(warmContainer);
         } catch (error: any) {
-          logger.error('[WarmPool] Memory check failed', {
-            containerId: instance.id,
+          logger.error('Health check failed', {
+            id: warmContainer.id.substring(0, 12),
             error: error.message,
           });
         }
       }
-    }, 30000); // Check every 30s
+    }, this.config.healthCheckInterval);
+
+    logger.info('Health checks started', {
+      interval: this.config.healthCheckInterval,
+    });
   }
 
-  /**
-   * 🔥 ZOMBIE CONTAINER KILLER
-   */
-  private startZombieKiller(): void {
-    setInterval(async () => {
-      try {
-        const containers = await docker.listContainers({
-          all: true,
-          filters: { label: ['aenews.type=sandbox'] },
+  private async healthCheck(warmContainer: WarmContainer): Promise<void> {
+    try {
+      // 1. Check container is running
+      const inspect = await warmContainer.container.inspect();
+      
+      if (!inspect.State.Running) {
+        throw new Error('Container not running');
+      }
+
+      // 2. Check resource usage
+      const stats = await this.getContainerStats(warmContainer.container);
+      
+      warmContainer.memoryUsageMB = stats.memoryUsageMB;
+      warmContainer.cpuUsagePercent = stats.cpuUsagePercent;
+
+      // 3. Memory leak detection
+      if (stats.memoryUsageMB > this.config.maxMemoryMB) {
+        logger.warn('Memory leak detected, destroying container', {
+          id: warmContainer.id.substring(0, 12),
+          memoryMB: stats.memoryUsageMB,
         });
-
-        for (const containerInfo of containers) {
-          const id = containerInfo.Id;
-          const state = containerInfo.State;
-          const created = new Date(containerInfo.Created * 1000);
-          const age = Date.now() - created.getTime();
-
-          const isZombie = (state === 'exited' && age > 60000) || (state === 'running' && age > 30 * 60 * 1000);
-
-          if (isZombie) {
-            logger.warn('[WarmPool] 🧟 ZOMBIE DETECTED - killing', {
-              id: id.substring(0, 12),
-              state,
-              age: Math.floor(age / 1000) + 's',
-            });
-
-            const container = docker.getContainer(id);
-            try {
-              await container.stop({ t: 1 });
-              await container.remove({ force: true });
-              metrics.sandboxZombiesKilled.inc();
-            } catch (killError: any) {
-              logger.error('[WarmPool] Zombie kill failed', { error: killError.message });
-            }
-
-            // Remove from pool
-            for (const [poolId, instance] of this.pool.entries()) {
-              if (instance.container.id === id) {
-                this.pool.delete(poolId);
-                break;
-              }
-            }
-          }
-        }
-      } catch (error: any) {
-        logger.error('[WarmPool] Zombie killer error', { error: error.message });
-      }
-    }, 60000); // Check every 1 min
-  }
-
-  /**
-   * 🔥 DISK SATURATION MONITOR
-   */
-  private startDiskSaturationMonitor(): void {
-    setInterval(async () => {
-      try {
-        const df = await docker.df();
-        const volumesSize = df.Volumes?.reduce((sum, v) => sum + (v.UsageData?.Size || 0), 0) || 0;
-        const imagesSize = df.Images?.reduce((sum, i) => sum + i.Size, 0) || 0;
-        const containersSize = df.Containers?.reduce((sum, c) => sum + (c.SizeRw || 0), 0) || 0;
-
-        const totalUsageMB = (volumesSize + imagesSize + containersSize) / 1024 / 1024;
-        const DISK_LIMIT_MB = 50000; // 50GB limit
-        const usagePercent = (totalUsageMB / DISK_LIMIT_MB) * 100;
-
-        metrics.sandboxDiskUsage.set(usagePercent);
-
-        if (usagePercent > 90) {
-          logger.error('[WarmPool] 🚨 DISK SATURATION', {
-            usageMB: totalUsageMB.toFixed(2),
-            limitMB: DISK_LIMIT_MB,
-            percentUsed: usagePercent.toFixed(1) + '%',
-          });
-
-          // Emergency cleanup: prune unused containers/images
-          await docker.pruneContainers({ filters: { until: ['24h'] } });
-          await docker.pruneImages({ filters: { dangling: { true: true } } });
-        }
-      } catch (error: any) {
-        logger.error('[WarmPool] Disk monitor error', { error: error.message });
-      }
-    }, 60000); // Check every 1 min
-  }
-
-  /**
-   * Docker health check with auto-recovery
-   */
-  private startDockerHealthCheck(): void {
-    this.healthCheckInterval = setInterval(async () => {
-      try {
-        await docker.ping();
-        if (!this.dockerHealthy) {
-          logger.info('[WarmPool] ✅ Docker recovered - AUTO-HEALING');
-          this.dockerHealthy = true;
-          this.circuitBreaker.state = 'half-open';
-
-          const lostContainers = this.MIN_POOL_SIZE - this.pool.size;
-          if (lostContainers > 0) {
-            logger.warn(`[WarmPool] Restoring ${lostContainers} containers`);
-            await this.warmPool();
-          }
-
-          this.processWaitingQueue();
-        }
-      } catch (error: any) {
-        if (this.dockerHealthy) {
-          logger.error('[WarmPool] ❌ Docker unhealthy', { error: error.message });
-          this.dockerHealthy = false;
-          this.emit('docker:unhealthy');
-
-          this.circuitBreaker.failures++;
-          this.circuitBreaker.lastFailure = Date.now();
-          if (this.circuitBreaker.failures >= this.CIRCUIT_BREAKER_THRESHOLD) {
-            this.circuitBreaker.state = 'open';
-            logger.error('[WarmPool] 🔴 CIRCUIT BREAKER OPEN');
-          }
-        }
-      }
-    }, 10000); // Check every 10s
-  }
-
-  /**
-   * Initialize warm pool
-   */
-  private async initialize(): Promise<void> {
-    try {
-      await this.createIsolatedNetwork();
-      await this.pullTemplateImages();
-      await this.warmPool();
-      this.startCleanupScheduler();
-
-      logger.info('[WarmPool] ✅ Initialized', {
-        minSize: this.MIN_POOL_SIZE,
-        maxSize: this.MAX_POOL_SIZE,
-      });
-    } catch (error: any) {
-      logger.error('[WarmPool] Initialization failed', { error: error.message });
-      throw error;
-    }
-  }
-
-  /**
-   * Create isolated Docker network
-   */
-  private async createIsolatedNetwork(): Promise<void> {
-    try {
-      const networks = await docker.listNetworks({ filters: { name: [this.ISOLATED_NETWORK] } });
-
-      if (networks.length > 0) {
-        logger.info(`[WarmPool] Network ${this.ISOLATED_NETWORK} exists`);
+        await this.destroyContainer(warmContainer.id, 'memory_leak');
         return;
       }
 
-      await docker.createNetwork({
-        Name: this.ISOLATED_NETWORK,
-        Driver: 'bridge',
-        Internal: true, // No external access
-        EnableIPv6: false,
+      // 4. CPU abuse detection
+      if (stats.cpuUsagePercent > this.config.maxCpuPercent) {
+        logger.warn('CPU abuse detected, destroying container', {
+          id: warmContainer.id.substring(0, 12),
+          cpuPercent: stats.cpuUsagePercent,
+        });
+        await this.destroyContainer(warmContainer.id, 'cpu_abuse');
+        return;
+      }
+
+      // 5. Verify network isolation
+      if (!stats.networkIsolated) {
+        logger.error('Network isolation compromised!', {
+          id: warmContainer.id.substring(0, 12),
+        });
+        Sentry.captureMessage('Container network isolation compromised', 'error');
+        await this.destroyContainer(warmContainer.id, 'security_breach');
+        return;
+      }
+
+      // 6. Fingerprint verification (détecte compromission)
+      const currentFingerprint = await this.generateFingerprint(warmContainer.container);
+      if (currentFingerprint !== warmContainer.fingerprint) {
+        logger.error('Container fingerprint mismatch - possible compromise!', {
+          id: warmContainer.id.substring(0, 12),
+          expected: warmContainer.fingerprint,
+          actual: currentFingerprint,
+        });
+        Sentry.captureMessage('Container fingerprint compromised', 'critical');
+        await this.destroyContainer(warmContainer.id, 'compromised');
+        return;
+      }
+
+      // Health check passed
+      warmContainer.lastHealthCheck = new Date();
+      warmContainer.healthCheckFailures = 0;
+      
+      if (warmContainer.state === 'unhealthy') {
+        warmContainer.state = 'ready';
+        logger.info('Container recovered', {
+          id: warmContainer.id.substring(0, 12),
+        });
+      }
+
+    } catch (error: any) {
+      warmContainer.healthCheckFailures++;
+      warmContainer.state = 'unhealthy';
+
+      logger.error('Health check failed', {
+        id: warmContainer.id.substring(0, 12),
+        failures: warmContainer.healthCheckFailures,
+        error: error.message,
       });
 
-      logger.info(`[WarmPool] ✅ Created isolated network ${this.ISOLATED_NETWORK}`);
-    } catch (error: any) {
-      logger.error('[WarmPool] Network creation failed', { error: error.message });
-      throw error;
-    }
-  }
-
-  /**
-   * Pull template images
-   */
-  private async pullTemplateImages(): Promise<void> {
-    const templates = ['node:18-alpine', 'python:3.11-slim'];
-    for (const template of templates) {
-      try {
-        const image = await docker.getImage(template);
-        await image.inspect(); // Verify exists
-        this.templates.set(template, image);
-        logger.info(`[WarmPool] Template ${template} cached`);
-      } catch {
-        logger.info(`[WarmPool] Pulling ${template}...`);
-        await docker.pull(template);
-        const image = await docker.getImage(template);
-        this.templates.set(template, image);
+      // Destroy after 3 consecutive failures
+      if (warmContainer.healthCheckFailures >= 3) {
+        await this.destroyContainer(warmContainer.id, 'health_check_failed');
       }
     }
   }
 
-  /**
-   * Warm pool with containers
-   */
-  private async warmPool(): Promise<void> {
-    const currentSize = this.pool.size;
-    const toAdd = Math.min(this.MIN_POOL_SIZE - currentSize, this.MAX_POOL_SIZE - currentSize);
-
-    if (toAdd <= 0) return;
-
-    logger.info(`[WarmPool] Warming ${toAdd} containers`);
-
-    const promises = Array.from({ length: toAdd }, () =>
-      this.createContainer({ template: 'node', networkMode: 'none' })
-    );
-
-    await Promise.allSettled(promises);
-  }
-
-  /**
-   * Create container with baseline memory tracking
-   */
-  private async createContainer(config: SandboxConfig): Promise<SandboxInstance> {
-    const id = `sandbox-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-    const container = await docker.createContainer({
-      Image: 'node:18-alpine',
-      name: id,
-      Cmd: ['tail', '-f', '/dev/null'],
-      NetworkingConfig: {
-        EndpointsConfig: {
-          [this.ISOLATED_NETWORK]: {},
-        },
-      },
-      HostConfig: {
-        Memory: 512 * 1024 * 1024, // 512MB
-        CpuQuota: 50000, // 0.5 CPU
-        CapDrop: ['ALL'],
-        SecurityOpt: ['no-new-privileges'],
-      },
-      Labels: {
-        'aenews.type': 'sandbox',
-        'aenews.template': config.template,
-      },
-    });
-
-    await container.start();
-
-    // Get baseline memory
+  private async getContainerStats(container: Container): Promise<ContainerStats> {
     const stats = await container.stats({ stream: false });
-    const memoryBaseline = stats.memory_stats.usage || 0;
+    
+    const memoryUsageMB = stats.memory_stats.usage 
+      ? stats.memory_stats.usage / (1024 * 1024)
+      : 0;
 
-    const instance: SandboxInstance = {
-      id,
-      container,
-      config,
-      status: 'ready',
-      createdAt: new Date(),
-      lastUsed: new Date(),
-      executions: 0,
-      memoryBaseline,
+    const cpuDelta = stats.cpu_stats.cpu_usage.total_usage - 
+      (stats.precpu_stats?.cpu_usage?.total_usage || 0);
+    const systemDelta = stats.cpu_stats.system_cpu_usage - 
+      (stats.precpu_stats?.system_cpu_usage || 0);
+    const cpuUsagePercent = systemDelta > 0 
+      ? (cpuDelta / systemDelta) * 100 
+      : 0;
+
+    const inspect = await container.inspect();
+    const networkIsolated = inspect.HostConfig.NetworkMode === 'none';
+
+    // Disk usage (approximation)
+    const diskUsageMB = 0; // TODO: Implement disk usage tracking
+
+    return {
+      memoryUsageMB,
+      cpuUsagePercent,
+      networkIsolated,
+      diskUsageMB,
     };
-
-    this.pool.set(id, instance);
-    logger.info(`[WarmPool] ✅ Created ${id}`, { memoryBaselineMB: (memoryBaseline / 1024 / 1024).toFixed(2) });
-
-    return instance;
   }
 
-  /**
-   * Acquire container with metrics tracking
-   */
-  async acquire(config: SandboxConfig): Promise<SandboxInstance> {
-    const startTime = Date.now();
-    this.requestCount++;
+  private async generateFingerprint(container: Container): Promise<string> {
+    try {
+      const exec = await container.exec({
+        Cmd: ['sh', '-c', 'sha256sum /etc/passwd /bin/sh 2>/dev/null || echo "error"'],
+        AttachStdout: true,
+      });
 
-    return this.acquireMutex.runExclusive(async () => {
-      if (this.circuitBreaker.state === 'open') {
-        const timeSinceFail = Date.now() - this.circuitBreaker.lastFailure;
-        if (timeSinceFail < this.CIRCUIT_BREAKER_TIMEOUT) {
-          this.rejectionCount++;
-          throw new Error('Circuit breaker OPEN - Docker unhealthy');
+      const stream = await exec.start({ hijack: true, stdin: false });
+      
+      return new Promise((resolve) => {
+        let output = '';
+        stream.on('data', (chunk: Buffer) => {
+          output += chunk.toString();
+        });
+        stream.on('end', () => {
+          const hash = output.trim().split(' ')[0] || 'unknown';
+          resolve(hash);
+        });
+      });
+    } catch {
+      return 'error';
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // ♻️ RECYCLING (removes old/idle containers)
+  // ═══════════════════════════════════════════════════════════════
+
+  private startRecycling(): void {
+    this.recyclingInterval = setInterval(async () => {
+      const now = Date.now();
+      const containers = Array.from(this.pool.values());
+
+      for (const warmContainer of containers) {
+        const shouldRecycle = this.shouldRecycle(warmContainer, now);
+        
+        if (shouldRecycle && warmContainer.state !== 'active') {
+          await this.destroyContainer(warmContainer.id, 'recycling');
         }
-        this.circuitBreaker.state = 'half-open';
       }
 
-      let instance = Array.from(this.pool.values()).find((i) => i.status === 'ready');
-
-      if (!instance) {
-        if (this.pool.size < this.MAX_POOL_SIZE) {
-          instance = await this.createContainer(config);
-        } else {
-          // Add to waiting queue
-          const waitStart = Date.now();
-          return new Promise((resolve, reject) => {
-            this.waitingQueue.push({ config, resolve, reject, enqueuedAt: waitStart });
-            logger.warn('[WarmPool] 🚦 Container queued', { queueDepth: this.waitingQueue.length });
+      // Ensure minimum pool size
+      if (this.pool.size < this.config.minSize) {
+        const needed = this.config.minSize - this.pool.size;
+        for (let i = 0; i < needed; i++) {
+          this.createWarmContainer().catch(err => {
+            logger.error('Failed to maintain minimum pool size', { error: err.message });
           });
         }
       }
 
-      instance.status = 'busy';
-      instance.lastUsed = new Date();
-      instance.executions++;
+    }, 60000); // Every minute
 
-      const waitTime = Date.now() - startTime;
-      this.waitTimes.push(waitTime);
-      if (this.waitTimes.length > 100) this.waitTimes.shift();
-
-      metrics.sandboxAcquireTime.observe(waitTime);
-
-      return instance;
-    });
+    logger.info('Recycling started');
   }
 
-  /**
-   * Release container
-   */
-  async release(id: string): Promise<void> {
-    const instance = this.pool.get(id);
-    if (!instance) return;
+  private shouldRecycle(warmContainer: WarmContainer, now = Date.now()): boolean {
+    const age = now - warmContainer.createdAt.getTime();
+    const idleTime = now - warmContainer.lastUsedAt.getTime();
 
-    instance.status = 'ready';
+    // Recycle if:
+    // 1. Too old
+    if (age > this.config.maxLifetime) return true;
+    
+    // 2. Idle too long
+    if (idleTime > this.config.maxIdleTime) return true;
+    
+    // 3. Too many executions
+    if (warmContainer.executionCount > this.config.maxExecutions) return true;
+    
+    // 4. Unhealthy
+    if (warmContainer.state === 'unhealthy') return true;
 
-    // Auto-recycle if too many executions
-    if (instance.executions >= this.MAX_EXECUTIONS_PER_CONTAINER) {
-      logger.info(`[WarmPool] ♻️ Recycling ${id} (executions: ${instance.executions})`);
-      await this.removeContainer(id);
-      this.warmPool();
-    }
-
-    this.processWaitingQueue();
+    return false;
   }
 
-  /**
-   * Process waiting queue
-   */
-  private async processWaitingQueue(): Promise<void> {
-    while (this.waitingQueue.length > 0) {
-      const ready = Array.from(this.pool.values()).find((i) => i.status === 'ready');
-      if (!ready) break;
+  // ═══════════════════════════════════════════════════════════════
+  // 📈 AUTO-SCALING
+  // ═══════════════════════════════════════════════════════════════
 
-      const { config, resolve, enqueuedAt } = this.waitingQueue.shift()!;
-      const waitTime = Date.now() - enqueuedAt;
-      this.waitTimes.push(waitTime);
+  private startAutoScaling(): void {
+    this.autoScalingInterval = setInterval(() => {
+      const readyCount = Array.from(this.pool.values()).filter(
+        c => c.state === 'ready'
+      ).length;
 
-      try {
-        const instance = await this.acquire(config);
-        resolve(instance);
-      } catch (error) {
-        logger.error('[WarmPool] Queue processing failed', { error });
+      const activeCount = Array.from(this.pool.values()).filter(
+        c => c.state === 'active'
+      ).length;
+
+      const utilizationPercent = (activeCount / this.pool.size) * 100;
+
+      logger.debug('Pool utilization', {
+        total: this.pool.size,
+        ready: readyCount,
+        active: activeCount,
+        utilization: `${utilizationPercent.toFixed(1)}%`,
+      });
+
+      // Scale up if utilization > 80%
+      if (utilizationPercent > 80 && this.pool.size < this.config.maxSize) {
+        logger.info('Scaling up pool', { current: this.pool.size });
+        this.createWarmContainer().catch(err => {
+          logger.error('Auto-scaling failed', { error: err.message });
+        });
       }
-    }
+
+      // Scale down if too many idle
+      if (readyCount > this.config.minSize + 3) {
+        const toRemove = Array.from(this.pool.values())
+          .filter(c => c.state === 'ready')
+          .sort((a, b) => a.lastUsedAt.getTime() - b.lastUsedAt.getTime())
+          .slice(0, readyCount - this.config.minSize);
+
+        for (const container of toRemove) {
+          this.destroyContainer(container.id, 'scale_down').catch(err => {
+            logger.error('Scale down failed', { error: err.message });
+          });
+        }
+      }
+
+    }, 30000); // Every 30s
+
+    logger.info('Auto-scaling started');
   }
 
-  /**
-   * Remove container
-   */
-  private async removeContainer(id: string): Promise<void> {
-    const instance = this.pool.get(id);
-    if (!instance) return;
+  // ═══════════════════════════════════════════════════════════════
+  // 🗑️ DESTROY CONTAINER
+  // ═══════════════════════════════════════════════════════════════
+
+  private async destroyContainer(containerId: string, reason: string): Promise<void> {
+    const warmContainer = this.pool.get(containerId);
+    
+    if (!warmContainer) return;
+
+    warmContainer.state = 'terminating';
 
     try {
-      await instance.container.stop({ t: 1 });
-      await instance.container.remove({ force: true });
-      this.pool.delete(id);
-      logger.info(`[WarmPool] ✅ Removed ${id}`);
+      await warmContainer.container.stop({ t: 10 });
+      await warmContainer.container.remove({ force: true });
+
+      this.pool.delete(containerId);
+      metricsService.incrementSandboxContainersDestroyed();
+      metricsService.setSandboxWarmPoolSize(this.pool.size);
+
+      logger.info('Container destroyed', {
+        id: containerId.substring(0, 12),
+        reason,
+        lifetime: Date.now() - warmContainer.createdAt.getTime(),
+        executions: warmContainer.executionCount,
+      });
+
     } catch (error: any) {
-      logger.error(`[WarmPool] Remove failed ${id}`, { error: error.message });
+      logger.error('Failed to destroy container', {
+        id: containerId.substring(0, 12),
+        error: error.message,
+      });
+      
+      // Force remove from pool anyway
+      this.pool.delete(containerId);
     }
   }
 
-  /**
-   * Remove idle containers
-   */
-  private async removeIdleContainers(): Promise<void> {
-    const now = Date.now();
-    for (const instance of this.pool.values()) {
-      const idleTime = now - instance.lastUsed.getTime();
-      if (instance.status === 'ready' && idleTime > this.IDLE_TIMEOUT && this.pool.size > this.MIN_POOL_SIZE) {
-        await this.removeContainer(instance.id);
-      }
+  // ═══════════════════════════════════════════════════════════════
+  // 🔌 CIRCUIT BREAKER (protège contre les crashes Docker)
+  // ═══════════════════════════════════════════════════════════════
+
+  private handleDockerFailure(error: Error): void {
+    this.circuitBreakerFailures++;
+
+    if (this.circuitBreakerFailures >= 5) {
+      this.circuitBreakerState = 'OPEN';
+      logger.error('Circuit breaker OPEN - Docker daemon appears unhealthy');
+      Sentry.captureMessage('Docker daemon circuit breaker triggered', 'error');
+
+      // Auto-reset after 60s
+      setTimeout(() => {
+        this.circuitBreakerFailures = 0;
+        this.circuitBreakerState = 'CLOSED';
+        logger.info('Circuit breaker CLOSED - retrying Docker operations');
+      }, 60000);
     }
   }
 
-  /**
-   * Cleanup scheduler
-   */
-  private startCleanupScheduler(): void {
-    setInterval(() => {
-      this.removeIdleContainers();
-    }, 60000); // Check every 1 min
-  }
+  // ═══════════════════════════════════════════════════════════════
+  // 🛑 SHUTDOWN
+  // ═══════════════════════════════════════════════════════════════
 
-  /**
-   * 🔥 GET ADVANCED METRICS
-   */
-  getMetrics(): PoolMetrics {
-    const total = this.pool.size;
-    const available = Array.from(this.pool.values()).filter((i) => i.status === 'ready').length;
-    const busy = total - available;
-    const queueDepth = this.waitingQueue.length;
-    const avgWaitTimeMs = this.waitTimes.length > 0 ? this.waitTimes.reduce((a, b) => a + b, 0) / this.waitTimes.length : 0;
-    const rejectionRate = this.requestCount > 0 ? (this.rejectionCount / this.requestCount) * 100 : 0;
-    const saturationPercent = (busy / this.MAX_POOL_SIZE) * 100;
-    const predictedDemand = this.loadForecaster.predictDemand();
-
-    return {
-      total,
-      available,
-      busy,
-      queueDepth,
-      avgWaitTimeMs,
-      rejectionRate,
-      saturationPercent,
-      predictedDemand,
-    };
-  }
-
-  /**
-   * Shutdown pool
-   */
   async shutdown(): Promise<void> {
-    logger.info('[WarmPool] 🛑 Shutting down...');
+    logger.info('Shutting down Warm Pool...');
 
-    if (this.healthCheckInterval) {
-      clearInterval(this.healthCheckInterval);
-    }
+    if (this.healthCheckInterval) clearInterval(this.healthCheckInterval);
+    if (this.recyclingInterval) clearInterval(this.recyclingInterval);
+    if (this.autoScalingInterval) clearInterval(this.autoScalingInterval);
 
-    const promises = Array.from(this.pool.keys()).map((id) => this.removeContainer(id));
-    await Promise.all(promises);
+    const destroyPromises = Array.from(this.pool.keys()).map(id =>
+      this.destroyContainer(id, 'shutdown')
+    );
 
-    logger.info('[WarmPool] ✅ Shutdown complete');
+    await Promise.allSettled(destroyPromises);
+
+    logger.info('Warm Pool shutdown complete');
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 📊 METRICS
+  // ═══════════════════════════════════════════════════════════════
+
+  getMetrics() {
+    return {
+      poolSize: this.pool.size,
+      ready: Array.from(this.pool.values()).filter(c => c.state === 'ready').length,
+      active: Array.from(this.pool.values()).filter(c => c.state === 'active').length,
+      unhealthy: Array.from(this.pool.values()).filter(c => c.state === 'unhealthy').length,
+      circuitBreakerState: this.circuitBreakerState,
+      avgMemoryMB: Array.from(this.pool.values()).reduce((sum, c) => sum + c.memoryUsageMB, 0) / this.pool.size,
+    };
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 📤 EXPORTS
-// ═══════════════════════════════════════════════════════════════════════════
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🚀 SINGLETON EXPORT
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 export const warmPool = new SandboxWarmPool();
+
+process.on('SIGTERM', async () => {
+  await warmPool.shutdown();
+});
+
+process.on('SIGINT', async () => {
+  await warmPool.shutdown();
+});
