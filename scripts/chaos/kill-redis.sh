@@ -49,7 +49,7 @@ check_redis_status() {
 }
 
 check_api_health() {
-    curl -sf http://localhost:3000/api/health | grep '"status":"ok"' > /dev/null 2>&1
+    curl -sf http://localhost:3001/api/health | grep '"status":"ok"' > /dev/null 2>&1
     return $?
 }
 
@@ -59,7 +59,7 @@ measure_circuit_breaker_detection() {
     
     while [ $detection_time -lt $max_wait ]; do
         # Tester si l'API retourne 503 ou erreur circuit-breaker
-        response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/projects)
+        response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/api/projects)
         
         if [ "$response" = "503" ] || [ "$response" = "500" ]; then
             log_info "Circuit-breaker détecté après ${detection_time}s"
@@ -94,7 +94,7 @@ log_info "✅ Redis et API actifs"
 
 # Créer un job de test
 log_info "Création d'un job de test..."
-JOB_ID=$(curl -sf -X POST http://localhost:3000/api/projects \
+JOB_ID=$(curl -sf -X POST http://localhost:3001/api/projects \
     -H "Content-Type: application/json" \
     -d '{"name":"chaos-test-redis","description":"Test de résilience Redis"}' \
     | jq -r '.id' 2>/dev/null || echo "test-job-$(date +%s)")
@@ -138,7 +138,7 @@ fi
 
 # Vérifier que les nouveaux jobs sont rejetés
 log_info "Test création job (doit échouer)..."
-http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:3000/api/projects \
+http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:3001/api/projects \
     -H "Content-Type: application/json" \
     -d '{"name":"should-fail"}')
 
@@ -192,7 +192,7 @@ fi
 
 # Tester création d'un nouveau job
 log_info "Test création nouveau job..."
-NEW_JOB=$(curl -sf -X POST http://localhost:3000/api/projects \
+NEW_JOB=$(curl -sf -X POST http://localhost:3001/api/projects \
     -H "Content-Type: application/json" \
     -d '{"name":"post-recovery-test"}' \
     | jq -r '.id' 2>/dev/null || echo "")

@@ -1,0 +1,16 @@
+node_modules
+dist
+.git
+.github
+*.md
+!README.md
+docs/
+.env
+.env.local
+.env.*.local
+secrets/
+*.log
+npm-debug.log*
+.turbo
+coverage
+.DS_Store

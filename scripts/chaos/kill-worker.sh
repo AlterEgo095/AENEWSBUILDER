@@ -42,7 +42,7 @@ log_error() {
 
 get_job_state() {
     local job_id=$1
-    curl -sf "http://localhost:3000/api/projects/$job_id" | jq -r '.state' 2>/dev/null || echo "UNKNOWN"
+    curl -sf "http://localhost:3001/api/projects/$job_id" | jq -r '.state' 2>/dev/null || echo "UNKNOWN"
 }
 
 wait_for_state() {
@@ -91,7 +91,7 @@ kill_worker_process() {
 
 log_info "Phase 1/5: Création job de test..."
 
-JOB_RESPONSE=$(curl -sf -X POST http://localhost:3000/api/projects \
+JOB_RESPONSE=$(curl -sf -X POST http://localhost:3001/api/projects \
     -H "Content-Type: application/json" \
     -d '{
         "name": "chaos-worker-test",
@@ -197,7 +197,7 @@ log_info "Phase 4/5: Vérification Event Store..."
 # - L'événement de retry
 # - L'historique complet préservé
 
-EVENT_COUNT=$(curl -sf "http://localhost:3000/api/projects/$JOB_ID/events" | jq 'length' 2>/dev/null || echo "0")
+EVENT_COUNT=$(curl -sf "http://localhost:3001/api/projects/$JOB_ID/events" | jq 'length' 2>/dev/null || echo "0")
 
 log_info "Événements enregistrés: $EVENT_COUNT"
 
@@ -221,7 +221,7 @@ elif wait_for_state "$JOB_ID" "FAILED" 120; then
     log_warn "⚠️  Job échoué après retry"
     
     # Vérifier le nombre de retries
-    retry_count=$(curl -sf "http://localhost:3000/api/projects/$JOB_ID" | jq '.metadata.retryCount' 2>/dev/null || echo "0")
+    retry_count=$(curl -sf "http://localhost:3001/api/projects/$JOB_ID" | jq '.metadata.retryCount' 2>/dev/null || echo "0")
     log_info "Nombre de retries: $retry_count"
     
     if [ "$retry_count" -ge 1 ]; then

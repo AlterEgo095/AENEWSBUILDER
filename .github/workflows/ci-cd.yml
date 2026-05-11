@@ -53,10 +53,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run ESLint
-        run: pnpm lint || true
+        run: pnpm lint
 
       - name: Run TypeScript type checking
-        run: pnpm typecheck || true
+        run: pnpm typecheck
 
   # ============================================
   # Phase 2: Security Scanning
@@ -126,10 +126,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build all packages
-        run: pnpm build || echo "⚠️ Build completed with warnings"
+        run: pnpm build
 
       - name: Run unit tests
-        run: pnpm test || echo "⚠️ Tests need to be implemented"
+        run: pnpm test || echo "No tests configured yet"
         continue-on-error: true
 
   # ============================================
@@ -182,6 +182,28 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
+      - name: Extract Docker metadata for Studio
+        id: meta-studio
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/studio
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            latest
+
+      - name: Build and push Studio Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./apps/studio/Dockerfile
+          push: true
+          tags: ${{ steps.meta-studio.outputs.tags }}
+          labels: ${{ steps.meta-studio.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
   # ============================================
   # Phase 5: Deploy to VPS
   # ============================================
@@ -214,26 +236,12 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           DEPLOY_PATH: ${{ secrets.VPS_DEPLOY_PATH }}
         run: |
-          echo "📦 Copying files to VPS..."
+          echo "\U0001F4E6 Copying files to VPS..."
           scp docker-compose.yml $VPS_USER@$VPS_HOST:$DEPLOY_PATH/
           scp -r docker/ $VPS_USER@$VPS_HOST:$DEPLOY_PATH/
           
-          echo "🔄 Deploying on VPS..."
-          ssh $VPS_USER@$VPS_HOST << 'ENDSSH'
-            cd $DEPLOY_PATH
-            
-            # Pull latest images
-            docker-compose pull
-            
-            # Restart services
-            docker-compose up -d --remove-orphans
-            
-            # Show logs
-            docker-compose logs --tail=100
-            
-            # Clean up
-            docker system prune -af --volumes || true
-          ENDSSH
+          echo "\U0001F504 Deploying on VPS..."
+          ssh $VPS_USER@$VPS_HOST "cd $DEPLOY_PATH && docker-compose pull && docker-compose up -d --remove-orphans && docker-compose logs --tail=100"
 
       - name: Health check
         run: |

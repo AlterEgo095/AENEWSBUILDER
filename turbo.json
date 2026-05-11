@@ -18,6 +18,10 @@
     "lint": {
       "dependsOn": ["^lint"]
     },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**/*.ts", "src/**/*.tsx", "*.ts"]
+    },
     "clean": {
       "cache": false
     }

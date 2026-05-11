@@ -361,8 +361,7 @@ class EventStoreV2 {
     const events = await this.prisma.event.findMany({
       where,
       orderBy: [
-        { metadata: { path: ['lamportClock'], sort: 'asc' } }, // Sort by Lamport clock
-        { timestamp: 'asc' }, // Fallback to timestamp
+        { timestamp: 'asc' },
       ],
       take: filter.limit || 1000,
     });
@@ -641,7 +640,6 @@ class EventStoreV2 {
 
       const events = await this.prisma.event.findMany({
         orderBy: [
-          { metadata: { path: ['lamportClock'], sort: 'asc' } },
           { timestamp: 'asc' },
         ],
         take: 10000,

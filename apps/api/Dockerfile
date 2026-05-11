@@ -3,7 +3,7 @@
 # ============================================
 
 FROM node:20-alpine AS base
-RUN apk add --no-cache libc6-compat
+RUN apk add --no-cache libc6-compat openssl
 RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
 # ============================================
@@ -12,9 +12,10 @@ RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 FROM base AS deps
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml* ./
+COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
 COPY apps/api/package.json ./apps/api/
-RUN pnpm install --frozen-lockfile || npm install
+
+RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install --prod=false
 
 # ============================================
 # BUILDER STAGE
@@ -23,6 +24,7 @@ FROM base AS builder
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/apps/api/node_modules ./apps/api/node_modules
 COPY . .
 
 # Generate Prisma Client
@@ -34,7 +36,9 @@ RUN pnpm --filter @aenews/api build
 # ============================================
 # RUNNER STAGE
 # ============================================
-FROM base AS runner
+FROM node:20-alpine AS runner
+RUN apk add --no-cache libc6-compat openssl
+
 WORKDIR /app
 
 ENV NODE_ENV=production
@@ -47,6 +51,9 @@ COPY --from=builder --chown=aenews:nodejs /app/apps/api/dist ./dist
 COPY --from=builder --chown=aenews:nodejs /app/apps/api/node_modules ./node_modules
 COPY --from=builder --chown=aenews:nodejs /app/apps/api/package.json ./package.json
 COPY --from=builder --chown=aenews:nodejs /app/apps/api/prisma ./prisma
+
+# Create secrets directory with placeholder
+RUN mkdir -p /app/secrets
 
 USER aenews
 

@@ -11,9 +11,10 @@ RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 FROM base AS deps
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml* ./
+COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
 COPY apps/studio/package.json ./apps/studio/
-RUN pnpm install --frozen-lockfile || npm install
+
+RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install --prod=false
 
 # ============================================
 # BUILDER STAGE
@@ -34,21 +35,13 @@ FROM nginx:alpine AS runner
 
 COPY --from=builder /app/apps/studio/dist /usr/share/nginx/html
 
-# Nginx config for SPA
+# Nginx config for SPA (no /api proxy - external nginx handles that)
 RUN echo 'server { \
     listen 5173; \
     root /usr/share/nginx/html; \
     index index.html; \
     location / { \
         try_files $uri $uri/ /index.html; \
-    } \
-    location /api { \
-        proxy_pass http://api:3001; \
-        proxy_http_version 1.1; \
-        proxy_set_header Upgrade $http_upgrade; \
-        proxy_set_header Connection "upgrade"; \
-        proxy_set_header Host $host; \
-        proxy_set_header X-Real-IP $remote_addr; \
     } \
 }' > /etc/nginx/conf.d/default.conf
 

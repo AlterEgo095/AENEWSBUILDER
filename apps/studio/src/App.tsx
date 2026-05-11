@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Terminal } from './components/Terminal';
 import { Preview } from './components/Preview';
 import { JobManager } from './components/JobManager';
+import { AuthForm } from './components/AuthForm';
 import { useSSE } from './hooks/useSSE';
 import './App.css';
 
@@ -17,7 +18,19 @@ interface ProjectState {
   };
 }
 
+interface User {
+  id: string;
+  email: string;
+  name: string;
+}
+
 function App() {
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem('aenews:token'));
+  const [user, setUser] = useState<User | null>(() => {
+    const saved = localStorage.getItem('aenews:user');
+    return saved ? JSON.parse(saved) : null;
+  });
+
   const [projectState, setProjectState] = useState<ProjectState>({
     jobId: null,
     status: 'idle',
@@ -55,6 +68,28 @@ function App() {
     }
   }, [events]);
 
+  // Auth handlers
+  const handleAuthSuccess = (newToken: string, newUser: User) => {
+    setToken(newToken);
+    setUser(newUser);
+    localStorage.setItem('aenews:token', newToken);
+    localStorage.setItem('aenews:user', JSON.stringify(newUser));
+  };
+
+  const handleLogout = () => {
+    setToken(null);
+    setUser(null);
+    localStorage.removeItem('aenews:token');
+    localStorage.removeItem('aenews:user');
+    setSavedJobs([]);
+    localStorage.removeItem('aenews:jobs');
+  };
+
+  // Show auth form if not logged in
+  if (!token || !user) {
+    return <AuthForm onAuthSuccess={handleAuthSuccess} />;
+  }
+
   const handleSubmit = async () => {
     if (!prompt.trim()) return;
 
@@ -63,7 +98,10 @@ function App() {
 
       const response = await fetch('/api/projects', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
         body: JSON.stringify({
           prompt,
           name,
@@ -71,6 +109,10 @@ function App() {
       });
 
       const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || data.error || 'Failed to create project');
+      }
 
       const newJobId = data.projectId;
 
@@ -91,6 +133,11 @@ function App() {
         status: 'failed',
         logs: [...prev.logs, `Error: ${error.message}`],
       }));
+
+      // If 401, token expired
+      if (error.message.includes('Unauthorized') || error.message.includes('401')) {
+        handleLogout();
+      }
     }
   };
 
@@ -106,8 +153,26 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>🚀 AENEWS STUDIO</h1>
-        <p>AI-Powered Code Generation Platform</p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h1>AENEWS STUDIO</h1>
+            <p>AI-Powered Code Generation Platform</p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <span style={{ fontSize: '14px', opacity: 0.8 }}>{user.email}</span>
+            <button onClick={handleLogout} style={{
+              padding: '6px 16px',
+              borderRadius: '6px',
+              border: '1px solid rgba(255,255,255,0.2)',
+              background: 'rgba(255,255,255,0.1)',
+              color: 'white',
+              cursor: 'pointer',
+              fontSize: '13px',
+            }}>
+              Logout
+            </button>
+          </div>
+        </div>
       </header>
 
       <div className="app-layout">

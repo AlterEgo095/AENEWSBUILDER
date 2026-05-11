@@ -12,6 +12,7 @@
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "clean": "turbo run clean && rm -rf node_modules",
     "docker:up": "docker-compose up -d",
@@ -33,9 +34,9 @@
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
-    "@sentry/node": "^10.52.0",
-    "@sentry/profiling-node": "^10.52.0",
-    "dockerode": "^5.0.0",
+    "@sentry/node": "^7.108.0",
+    "@sentry/profiling-node": "^7.108.0",
+    "dockerode": "^3.3.5",
     "lru-cache": "^11.3.5",
     "prom-client": "^15.1.3"
   }
