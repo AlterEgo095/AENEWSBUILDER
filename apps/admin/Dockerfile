@@ -3,7 +3,6 @@
 # ============================================
 
 FROM node:20-alpine AS base
-RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
 # ============================================
 # DEPENDENCIES STAGE
@@ -11,10 +10,10 @@ RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 FROM base AS deps
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
+COPY package.json package-lock.json* pnpm-workspace.yaml* ./
 COPY apps/admin/package.json ./apps/admin/
 
-RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install --prod=false
+RUN npm ci --ignore-scripts 2>/dev/null || npm install
 
 # ============================================
 # BUILDER STAGE
@@ -26,7 +25,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/apps/admin/node_modules ./apps/admin/node_modules
 COPY . .
 
-RUN pnpm --filter @aenews/admin build
+RUN cd apps/admin && npm run build
 
 # ============================================
 # RUNNER STAGE (Nginx to serve static files)

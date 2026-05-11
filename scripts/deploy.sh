@@ -47,14 +47,19 @@ fi
 # Check .env file
 if [ ! -f .env ]; then
     echo -e "${RED}❌ .env file missing!${NC}"
-    echo -e "${YELLOW}Creating from .env.example...${NC}"
-    if [ -f .env.example ]; then
+    # Prefer production template, fall back to .env.example
+    if [ -f .env.production.example ]; then
+        cp .env.production.example .env
+        echo -e "${YELLOW}⚠️  .env created from .env.production.example. EDIT IT BEFORE CONTINUING!${NC}"
+        echo -e "${YELLOW}   nano .env${NC}"
+        exit 1
+    elif [ -f .env.example ]; then
         cp .env.example .env
-        echo -e "${YELLOW}⚠️  .env created from template. EDIT IT BEFORE CONTINUING!${NC}"
+        echo -e "${YELLOW}⚠️  .env created from .env.example. EDIT IT BEFORE CONTINUING!${NC}"
         echo -e "${YELLOW}   nano .env${NC}"
         exit 1
     else
-        echo -e "${RED}   .env.example not found either. Aborting.${NC}"
+        echo -e "${RED}   No .env template found. Aborting.${NC}"
         exit 1
     fi
 fi

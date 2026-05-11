@@ -8,7 +8,6 @@
 
 FROM node:20-alpine AS base
 RUN apk add --no-cache libc6-compat openssl
-RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
 WORKDIR /app
 
@@ -18,13 +17,13 @@ WORKDIR /app
 FROM base AS deps
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
+COPY package.json package-lock.json* pnpm-workspace.yaml* ./
 COPY apps/api/package.json ./apps/api/
 COPY apps/studio/package.json ./apps/studio/
 COPY apps/admin/package.json ./apps/admin/
 COPY packages/mcp/package.json ./packages/mcp/
 
-RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install --prod=false
+RUN npm ci --ignore-scripts 2>/dev/null || npm install
 
 # ============================================
 # BUILDER STAGE
@@ -43,7 +42,7 @@ COPY . .
 RUN cd apps/api && npx prisma generate
 
 # Build all packages
-RUN pnpm build
+RUN npm run build 2>/dev/null || (cd apps/api && npm run build)
 
 # ============================================
 # RUNNER STAGE (API only)

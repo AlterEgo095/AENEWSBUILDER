@@ -4,7 +4,6 @@
 
 FROM node:20-alpine AS base
 RUN apk add --no-cache libc6-compat openssl
-RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
 # ============================================
 # DEPENDENCIES STAGE
@@ -12,10 +11,10 @@ RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 FROM base AS deps
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
+COPY package.json package-lock.json* pnpm-workspace.yaml* ./
 COPY apps/api/package.json ./apps/api/
 
-RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install --prod=false
+RUN npm ci --ignore-scripts 2>/dev/null || npm install
 
 # ============================================
 # BUILDER STAGE
@@ -31,7 +30,7 @@ COPY . .
 RUN cd apps/api && npx prisma generate
 
 # Build API
-RUN pnpm --filter @aenews/api build
+RUN cd apps/api && npm run build
 
 # ============================================
 # RUNNER STAGE
