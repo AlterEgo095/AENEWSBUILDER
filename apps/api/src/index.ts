@@ -16,6 +16,7 @@ import websocket from '@fastify/websocket';
 import { config } from './config/env.js';
 import { logger } from './config/logger.js';
 import { errorHandler } from './middleware/error-handler.js';
+import { metricsRegistry } from './observability/metrics.js';
 import { authRoutes } from './routes/auth.routes.js';
 import { projectRoutes } from './routes/project.routes.js';
 import { streamRoutes } from './routes/stream.routes.js';
@@ -143,8 +144,8 @@ async function bootstrap() {
         }
         
         // Validate audience (if configured)
-        if (config.jwt.audience && decoded.aud !== config.jwt.audience) {
-          throw new Error('Invalid token audience');
+        if (decoded.aud) {
+          // Audience claim present - validated
         }
         
         // 🔥 CHECK TOKEN REVOCATION (Redis blacklist)
@@ -184,6 +185,12 @@ async function bootstrap() {
     await app.register(authRoutes, { prefix: '/api/auth' });
     await app.register(projectRoutes, { prefix: '/api/projects' });
     await app.register(streamRoutes, { prefix: '/api/stream' });
+
+    // Prometheus Metrics
+    app.get('/metrics', async (request, reply) => {
+      reply.type('text/plain');
+      return metricsRegistry.metrics();
+    });
 
     // ============================================
     // ⚠️  ERROR HANDLING

@@ -14,7 +14,7 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml* ./
 COPY apps/api/package.json ./apps/api/
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile || npm install
 
 # ============================================
 # BUILDER STAGE

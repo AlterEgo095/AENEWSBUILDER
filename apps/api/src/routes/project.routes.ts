@@ -15,7 +15,7 @@ const createProjectSchema = z.object({
 export async function projectRoutes(app: FastifyInstance) {
   // Create project
   app.post('/', {
-    onRequest: [app.authenticate],
+    onRequest: [(app as any).authenticate],
   }, async (request, reply) => {
     const body = createProjectSchema.parse(request.body);
     const user = request.user as any;
@@ -24,7 +24,7 @@ export async function projectRoutes(app: FastifyInstance) {
     
     const job: ProjectJob = {
       projectId,
-      userId: user.userId,
+      userId: user.id,
       prompt: body.prompt,
       state: 'INIT',
       context: {},
@@ -45,7 +45,7 @@ export async function projectRoutes(app: FastifyInstance) {
 
   // Get project status
   app.get('/:projectId', {
-    onRequest: [app.authenticate],
+    onRequest: [(app as any).authenticate],
   }, async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const queue = getProjectQueue();
@@ -75,7 +75,7 @@ export async function projectRoutes(app: FastifyInstance) {
 
   // List user projects
   app.get('/', {
-    onRequest: [app.authenticate],
+    onRequest: [(app as any).authenticate],
   }, async (request, reply) => {
     // TODO: Implement with Prisma
     return reply.send({
@@ -85,7 +85,7 @@ export async function projectRoutes(app: FastifyInstance) {
 
   // Delete project
   app.delete('/:projectId', {
-    onRequest: [app.authenticate],
+    onRequest: [(app as any).authenticate],
   }, async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const queue = getProjectQueue();

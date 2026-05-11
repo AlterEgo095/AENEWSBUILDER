@@ -28,7 +28,10 @@ import { LRUCache } from 'lru-cache';
 import crypto from 'crypto';
 import { logger } from '../config/logger.js';
 import { env } from '../config/env.js';
-import { metrics } from '../observability/metrics.js';
+import {
+  aiCost, aiCostAlerts, aiCacheHits, aiCacheMisses,
+  aiRequests as aiRequestsMetric, aiLatency, circuitBreakerState
+} from '../observability/metrics.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 🔧 TYPES & ENUMS
@@ -233,7 +236,7 @@ export class CostBudgetManager {
       this.projectRequestCounts.set(projectId, current + 1);
     }
 
-    metrics.aiCost.inc({ type: 'total' }, cost);
+    aiCost.inc({ type: 'total' }, cost);
   }
 
   /**
@@ -244,7 +247,7 @@ export class CostBudgetManager {
     if (this.alertsSent.has(key)) return;
 
     logger.error(`[CostBudget] 🚨 ALERT: ${type} - ${message}`);
-    metrics.aiCostAlerts.inc({ type });
+    aiCostAlerts.inc({ type });
 
     // TODO: Integrate with PagerDuty/Slack
     this.alertsSent.add(key);
@@ -299,12 +302,12 @@ export class SmartCache {
 
     if (cached) {
       logger.debug('[SmartCache] ✅ Cache HIT', { hash: hash.substring(0, 12) });
-      metrics.aiCacheHits.inc();
+      aiCacheHits.inc();
       return { ...cached.response, cached: true };
     }
 
     logger.debug('[SmartCache] ❌ Cache MISS', { hash: hash.substring(0, 12) });
-    metrics.aiCacheMisses.inc();
+    aiCacheMisses.inc();
     return null;
   }
 
@@ -387,7 +390,7 @@ export class HystrixCircuitBreaker {
         state.state = 'CLOSED';
         state.failures = 0;
         state.successes = 0;
-        metrics.aiCircuitBreakerState.set({ provider }, 1); // CLOSED
+        circuitBreakerState.set({ provider }, 1); // CLOSED
       }
     } else if (state.state === 'CLOSED') {
       state.failures = Math.max(0, state.failures - 1); // Gradual recovery
@@ -407,7 +410,7 @@ export class HystrixCircuitBreaker {
       state.state = 'OPEN';
       state.nextRetryTime = new Date(Date.now() + this.OPEN_TIMEOUT);
       state.successes = 0;
-      metrics.aiCircuitBreakerState.set({ provider }, 0); // OPEN
+      circuitBreakerState.set({ provider }, 0); // OPEN
     }
   }
 
@@ -441,7 +444,7 @@ export class AIFailoverEngine {
 
   constructor() {
     this.openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-    this.anthropic = new Anthropic({ apiKey: env.CLAUDE_API_KEY });
+    this.anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   }
 
   /**
@@ -500,8 +503,8 @@ export class AIFailoverEngine {
         this.circuitBreaker.recordSuccess(model.provider);
         this.smartCache.set(request.messages, aiResponse);
 
-        metrics.aiRequests.inc({ provider: model.provider, model: modelId, status: 'success' });
-        metrics.aiLatency.observe({ provider: model.provider }, latency);
+        aiRequestsMetric.inc({ provider: model.provider, model: modelId, status: 'success' });
+        aiLatency.observe({ provider: model.provider }, latency);
 
         return aiResponse;
       } catch (error: any) {
@@ -509,7 +512,7 @@ export class AIFailoverEngine {
         logger.error(`[AIFailover] Attempt ${attempt + 1} failed: ${error.message}`);
 
         this.circuitBreaker.recordFailure(model.provider);
-        metrics.aiRequests.inc({ provider: model.provider, model: modelId, status: 'failure' });
+        aiRequestsMetric.inc({ provider: model.provider, model: modelId, status: 'failure' });
 
         // Retry with delay (exponential backoff + jitter)
         if (attempt < models.length - 1) {

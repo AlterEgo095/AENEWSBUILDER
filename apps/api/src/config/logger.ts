@@ -7,7 +7,7 @@ import { config } from './env.js';
 
 const isDevelopment = config.server.nodeEnv === 'development';
 
-export const logger = pino({
+const _logger = pino({
   level: isDevelopment ? 'debug' : 'info',
   transport: isDevelopment
     ? {
@@ -27,3 +27,6 @@ export const logger = pino({
   },
   timestamp: pino.stdTimeFunctions.isoTime,
 });
+
+// Export as any to allow flexible logger.info(msg, data) calling convention
+export const logger: any = _logger;

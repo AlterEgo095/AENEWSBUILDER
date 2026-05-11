@@ -5,31 +5,31 @@
 
 import * as Sentry from '@sentry/node';
 import { nodeProfilingIntegration } from '@sentry/profiling-node';
-import { env } from '../config/env.js';
+import { config } from '../config/env.js';
 import { logger } from '../config/logger.js';
 
 export function initSentry() {
-  if (!env.SENTRY_DSN) {
+  if (!config.monitoring.sentryDsn) {
     logger.warn('Sentry DSN not configured, skipping initialization');
     return;
   }
 
   Sentry.init({
-    dsn: env.SENTRY_DSN,
-    environment: env.NODE_ENV,
+    dsn: config.monitoring.sentryDsn,
+    environment: config.server.nodeEnv,
     release: `aenews-builder@${process.env.npm_package_version || '1.0.0'}`,
 
     // Performance Monitoring
-    tracesSampleRate: env.NODE_ENV === 'production' ? 0.1 : 1.0,
+    tracesSampleRate: config.server.nodeEnv === "production" ? 0.1 : 1.0,
 
     // Profiling
-    profilesSampleRate: env.NODE_ENV === 'production' ? 0.1 : 1.0,
+    profilesSampleRate: config.server.nodeEnv === "production" ? 0.1 : 1.0,
     integrations: [nodeProfilingIntegration()],
 
     // Error sampling
     beforeSend(event, hint) {
       // Don't send errors in development
-      if (env.NODE_ENV === 'development') {
+      if (config.server.nodeEnv === "development") {
         console.error('Sentry Error:', hint.originalException || hint.syntheticException);
         return null;
       }
@@ -54,7 +54,7 @@ export function initSentry() {
   });
 
   logger.info('✅ Sentry error tracking initialized', {
-    environment: env.NODE_ENV,
+    environment: config.server.nodeEnv,
   });
 }
 

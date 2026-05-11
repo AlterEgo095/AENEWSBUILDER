@@ -47,7 +47,7 @@ export class SandboxManager {
       const docker = spawn('docker', [
         'run',
         '-d',
-        '--network', config.sandbox.network,
+        '--network', 'none',
         '--memory', config.sandbox.memoryLimit,
         '--cpus', config.sandbox.cpuLimit,
         `aenews/sandbox-${stack}:latest`,

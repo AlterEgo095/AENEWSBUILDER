@@ -17,7 +17,11 @@ export class CostTracker {
   private redis: ReturnType<typeof getRedis>;
 
   constructor() {
-    this.redis = getRedis();
+    try {
+      this.redis = getRedis();
+    } catch {
+      this.redis = null as any;
+    }
   }
 
   /**
@@ -25,6 +29,8 @@ export class CostTracker {
    */
   async record(projectId: string, operation: string, cost: number, tokens?: number): Promise<void> {
     try {
+      if (!this.redis) return;
+
       const record: CostRecord = {
         projectId,
         operation,

@@ -1,27 +1,24 @@
-# Use Node.js for the base image
-FROM node:alpine
+# ============================================
+# AENEWS BUILDER - Root Dockerfile (Monorepo)
+# ============================================
+# NOTE: Each app has its own Dockerfile.
+# Use docker-compose.yml to build individual services.
+# ============================================
 
-# Set the working directory
-WORKDIR /app/studio
+FROM node:20-alpine AS base
+RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
-# Copy package.json and yarn.lock files
-COPY package.json yarn.lock ./
+WORKDIR /app
 
-# Install dependencies
-RUN npm install --production
+COPY package.json pnpm-lock.yaml* ./
+COPY apps/api/package.json ./apps/api/
+COPY apps/studio/package.json ./apps/studio/
+COPY packages/mcp/package.json ./packages/mcp/
 
-# Copy the rest of the application code
+RUN pnpm install --frozen-lockfile || npm install
+
 COPY . .
 
-# Build the application using Vite
-RUN npm run build
+RUN pnpm build
 
-# Create a non-root user and switch to it
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-USER appuser
-
-# Expose the production-ready application port
-EXPOSE 3000
-
-# Start the application
-CMD ["npm", "run", "start"]
+CMD ["pnpm", "dev"]

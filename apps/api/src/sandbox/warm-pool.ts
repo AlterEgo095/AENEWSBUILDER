@@ -30,7 +30,10 @@ import { Mutex } from 'async-mutex';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { logger } from '../config/logger.js';
-import { metrics } from '../observability/metrics.js';
+import {
+  sandboxSecurityBreaches, sandboxMemoryLeaks, sandboxZombiesKilled,
+  sandboxDiskUsage, sandboxAcquireTime
+} from '../observability/metrics.js';
 
 const execAsync = promisify(exec);
 const docker = new Docker();
@@ -228,7 +231,7 @@ export class SandboxWarmPool extends EventEmitter {
 
             // Force destroy compromised container
             await this.removeContainer(instance.id);
-            metrics.sandboxSecurityBreaches.inc({ type: 'network_isolation' });
+            sandboxSecurityBreaches.inc({ type: 'network_isolation' });
           }
         } catch (error: any) {
           // Expected: ping should fail (network isolated)
@@ -271,7 +274,7 @@ export class SandboxWarmPool extends EventEmitter {
             });
 
             await this.removeContainer(instance.id);
-            metrics.sandboxMemoryLeaks.inc();
+            sandboxMemoryLeaks.inc();
             this.warmPool(); // Replace immediately
           }
         } catch (error: any) {
@@ -314,7 +317,7 @@ export class SandboxWarmPool extends EventEmitter {
             try {
               await container.stop({ t: 1 });
               await container.remove({ force: true });
-              metrics.sandboxZombiesKilled.inc();
+              sandboxZombiesKilled.inc();
             } catch (killError: any) {
               logger.error('[WarmPool] Zombie kill failed', { error: killError.message });
             }
@@ -349,7 +352,7 @@ export class SandboxWarmPool extends EventEmitter {
         const DISK_LIMIT_MB = 50000; // 50GB limit
         const usagePercent = (totalUsageMB / DISK_LIMIT_MB) * 100;
 
-        metrics.sandboxDiskUsage.set(usagePercent);
+        sandboxDiskUsage.set(usagePercent);
 
         if (usagePercent > 90) {
           logger.error('[WarmPool] 🚨 DISK SATURATION', {
@@ -579,7 +582,7 @@ export class SandboxWarmPool extends EventEmitter {
       this.waitTimes.push(waitTime);
       if (this.waitTimes.length > 100) this.waitTimes.shift();
 
-      metrics.sandboxAcquireTime.observe(waitTime);
+      sandboxAcquireTime.observe(waitTime);
 
       return instance;
     });

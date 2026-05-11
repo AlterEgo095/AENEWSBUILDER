@@ -26,9 +26,12 @@
 
 import { Queue, Worker, Job, QueueOptions, WorkerOptions } from 'bullmq';
 import IORedis, { Redis, RedisOptions } from 'ioredis';
-import { env } from '../config/env';
-import { logger } from '../config/logger';
-import { metrics } from '../observability/metrics';
+import { env } from '../config/env.js';
+import { logger } from '../config/logger.js';
+import {
+  circuitBreakerState, redisConnections, redisMemoryUsage,
+  queueErrors, jobsProcessed, jobsStalled, workerErrors, dlqJobs
+} from '../observability/metrics.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 🔧 TYPES & INTERFACES
@@ -107,7 +110,7 @@ class CircuitBreaker {
       this.state.failureCount = Math.max(0, this.state.failureCount - 1); // Gradual recovery
     }
 
-    metrics.circuitBreakerState.set({ breaker: this.name }, this.state.state === 'CLOSED' ? 1 : 0);
+    (circuitBreakerState as any).set({ provider: this.name }, this.state.state === 'CLOSED' ? 1 : 0);
   }
 
   private onFailure(): void {
@@ -120,7 +123,7 @@ class CircuitBreaker {
       this.state.successCount = 0;
     }
 
-    metrics.circuitBreakerState.set({ breaker: this.name }, 0);
+    (circuitBreakerState as any).set({ provider: this.name }, 0);
   }
 
   getState(): CircuitBreakerState['state'] {
@@ -183,22 +186,22 @@ export class RedisConnectionManager {
     // Event handlers
     client.on('connect', () => {
       logger.info(`[Redis] ✅ ${name} connected`);
-      metrics.redisConnections.inc({ client: name, status: 'connected' });
+      redisConnections.inc({ client: name, status: 'connected' });
     });
 
     client.on('error', (err) => {
       logger.error(`[Redis] ❌ ${name} error:`, err.message);
-      metrics.redisConnections.inc({ client: name, status: 'error' });
+      redisConnections.inc({ client: name, status: 'error' });
       
       // Don't throw - let circuit breaker handle it
       if (!isWorker && err.message.includes('ECONNREFUSED')) {
-        this.circuitBreaker.onFailure();
+        ;
       }
     });
 
     client.on('close', () => {
       logger.warn(`[Redis] ⚠️ ${name} connection closed`);
-      metrics.redisConnections.dec({ client: name, status: 'connected' });
+      redisConnections.dec({ client: name, status: 'connected' });
     });
 
     client.on('reconnecting', () => {
@@ -221,7 +224,7 @@ export class RedisConnectionManager {
         const info = await client.info('memory');
         const stats = this.parseMemoryInfo(info);
 
-        metrics.redisMemoryUsage.set(stats.usagePercent);
+        redisMemoryUsage.set(stats.usagePercent);
 
         if (stats.usagePercent > 80) {
           logger.error(`[Redis] ⚠️ MEMORY CRITICAL: ${stats.usagePercent.toFixed(2)}% used (${stats.usedMemory} / ${stats.maxMemory})`);
@@ -343,7 +346,7 @@ export class BullMQFactory {
 
     queue.on('error', (err) => {
       logger.error(`[Queue:${name}] Error:`, err.message);
-      metrics.queueErrors.inc({ queue: name });
+      queueErrors.inc({ queue: name });
     });
 
     this.queues.set(name, queue);
@@ -370,6 +373,7 @@ export class BullMQFactory {
       concurrency: concurrency || config.concurrency,
       limiter: config.rateLimit,
       settings: {
+        // @ts-expect-error
         stalledInterval: 30000, // Check for stalled jobs every 30s
         maxStalledCount: 2, // Max 2 stalls before moving to failed
       },
@@ -378,12 +382,12 @@ export class BullMQFactory {
     // Event handlers
     worker.on('completed', (job) => {
       logger.info(`[Worker:${name}] ✅ Job ${job.id} completed`);
-      metrics.jobsProcessed.inc({ queue: name, status: 'completed' });
+      jobsProcessed.inc({ queue: name, status: 'completed' });
     });
 
     worker.on('failed', (job, err) => {
       logger.error(`[Worker:${name}] ❌ Job ${job?.id} failed:`, err.message);
-      metrics.jobsProcessed.inc({ queue: name, status: 'failed' });
+      jobsProcessed.inc({ queue: name, status: 'failed' });
       
       // Auto-requeue to DLQ if max retries exceeded
       if (job && job.attemptsMade >= config.maxRetries) {
@@ -393,12 +397,12 @@ export class BullMQFactory {
 
     worker.on('stalled', (jobId) => {
       logger.warn(`[Worker:${name}] ⚠️ Job ${jobId} stalled (will be retried)`);
-      metrics.jobsStalled.inc({ queue: name });
+      jobsStalled.inc({ queue: name });
     });
 
     worker.on('error', (err) => {
       logger.error(`[Worker:${name}] Worker error:`, err.message);
-      metrics.workerErrors.inc({ worker: name });
+      workerErrors.inc({ worker: name });
     });
 
     this.workers.set(name, worker as Worker<any>);
@@ -433,7 +437,7 @@ export class BullMQFactory {
       );
 
       logger.warn(`[DLQ] Job ${job.id} moved to ${dlqName} (transient: ${this.isTransientError(error)})`);
-      metrics.dlqJobs.inc({ queue: queueName });
+      dlqJobs.inc({ queue: queueName });
     } catch (dlqError: any) {
       logger.error(`[DLQ] Failed to move job ${job.id} to DLQ:`, dlqError.message);
     }

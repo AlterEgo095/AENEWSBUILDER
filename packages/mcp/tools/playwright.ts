@@ -3,7 +3,7 @@
  * E2E testing automation for generated projects
  */
 
-import { chromium, Browser, Page } from 'playwright';
+import { chromium, Browser, Page } from 'playwright-core';
 
 export interface PlaywrightTool {
   name: 'playwright';

@@ -1,226 +1,104 @@
 /**
- * MCP Audit Logging System
- * Tracks all security events for compliance and forensics
+ * MCP Audit Log - Redis-based implementation
  * @module mcp/audit-log
  */
 
-import { PrismaClient } from '@prisma/client';
-import { logger } from '../../apps/api/src/config/logger.js';
+import IORedis from 'ioredis';
+import { logger } from './adapter.js';
 
-const prisma = new PrismaClient();
+let auditRedis: IORedis | null = null;
 
-export enum AuditEventType {
-  RATE_LIMIT_EXCEEDED = 'rate_limit_exceeded',
-  COMMAND_BLOCKED = 'command_blocked',
-  PERMISSION_DENIED = 'permission_denied',
-  TOOL_EXECUTION_START = 'tool_execution_start',
-  TOOL_EXECUTION_COMPLETE = 'tool_execution_complete',
-  TOOL_EXECUTION_FAILED = 'tool_execution_failed',
-  INJECTION_DETECTED = 'injection_detected',
-  FUZZING_DETECTED = 'fuzzing_detected',
+function getAuditRedis(): IORedis {
+  if (!auditRedis) {
+    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+    auditRedis = new IORedis(redisUrl);
+  }
+  return auditRedis;
 }
 
-export interface SecurityEvent {
-  type: AuditEventType;
+export interface AuditEntry {
+  id: string;
+  timestamp: string;
   toolId: string;
   userId?: string;
-  reason: string;
-  data?: any;
+  action: string;
+  input?: any;
+  output?: any;
+  duration?: number;
+  status: 'success' | 'error' | 'denied';
+  error?: string;
+  metadata?: Record<string, any>;
 }
 
-export interface ToolExecutionStart {
-  toolId: string;
-  userId?: string;
-  command: string[];
-  permissions: string[];
-}
+export class AuditLog {
+  private readonly keyPrefix = 'mcp:audit';
 
-export interface ToolExecutionComplete {
-  eventId: string;
-  toolId: string;
-  userId?: string;
-  duration: number;
-  exitCode: number;
-  outputSize: number;
-}
-
-export interface ToolExecutionFailed {
-  eventId: string;
-  toolId: string;
-  userId?: string;
-  error: string;
-  duration: number;
-}
-
-export class AuditLogger {
-  /**
-   * Log security event
-   */
-  async logSecurityEvent(event: SecurityEvent): Promise<string> {
+  async log(entry: Omit<AuditEntry, 'id' | 'timestamp'>): Promise<string> {
     try {
-      const record = await prisma.securityAudit.create({
-        data: {
-          type: event.type,
-          toolId: event.toolId,
-          userId: event.userId || 'system',
-          reason: event.reason,
-          data: event.data || {},
-          timestamp: new Date(),
-        },
-      });
+      const redis = getAuditRedis();
+      const id = `audit_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const auditEntry: AuditEntry = {
+        ...entry,
+        id,
+        timestamp: new Date().toISOString(),
+      };
 
-      logger.warn('🔒 Security event logged', {
-        id: record.id,
-        type: event.type,
-        toolId: event.toolId,
-      });
+      await redis.lpush(`${this.keyPrefix}:log`, JSON.stringify(auditEntry));
+      await redis.ltrim(`${this.keyPrefix}:log`, 0, 9999); // Keep last 10000 entries
 
-      return record.id;
+      logger.info({ id, toolId: entry.toolId, action: entry.action }, 'Audit log recorded');
+      return id;
     } catch (error: any) {
-      logger.error('Failed to log security event', {
-        error: error.message,
-        event,
-      });
-      throw error;
+      logger.error({ error: error.message }, 'Failed to write audit log');
+      return '';
     }
   }
 
-  /**
-   * Log tool execution start
-   */
-  async logToolExecutionStart(execution: ToolExecutionStart): Promise<string> {
+  async getRecent(limit = 50): Promise<AuditEntry[]> {
     try {
-      const record = await prisma.toolExecution.create({
-        data: {
-          toolId: execution.toolId,
-          userId: execution.userId || 'system',
-          command: execution.command,
-          permissions: execution.permissions,
-          status: 'running',
-          startedAt: new Date(),
-        },
-      });
-
-      logger.info('Tool execution started', {
-        id: record.id,
-        toolId: execution.toolId,
-      });
-
-      return record.id;
+      const redis = getAuditRedis();
+      const entries = await redis.lrange(`${this.keyPrefix}:log`, 0, limit - 1);
+      return entries.map((e) => JSON.parse(e));
     } catch (error: any) {
-      logger.error('Failed to log tool execution start', {
-        error: error.message,
-        execution,
-      });
-      throw error;
+      logger.error({ error: error.message }, 'Failed to read audit log');
+      return [];
     }
   }
 
-  /**
-   * Log tool execution complete
-   */
-  async logToolExecutionComplete(execution: ToolExecutionComplete): Promise<void> {
+  async getByTool(toolId: string, limit = 50): Promise<AuditEntry[]> {
     try {
-      await prisma.toolExecution.update({
-        where: { id: execution.eventId },
-        data: {
-          status: 'completed',
-          exitCode: execution.exitCode,
-          outputSize: execution.outputSize,
-          duration: execution.duration,
-          completedAt: new Date(),
-        },
-      });
-
-      logger.info('Tool execution completed', {
-        id: execution.eventId,
-        duration: execution.duration,
-        exitCode: execution.exitCode,
-      });
+      const redis = getAuditRedis();
+      const allEntries = await redis.lrange(`${this.keyPrefix}:log`, 0, -1);
+      return allEntries
+        .map((e) => JSON.parse(e) as AuditEntry)
+        .filter((e) => e.toolId === toolId)
+        .slice(0, limit);
     } catch (error: any) {
-      logger.error('Failed to log tool execution complete', {
-        error: error.message,
-        execution,
-      });
+      logger.error({ error: error.message }, 'Failed to query audit log');
+      return [];
     }
   }
 
-  /**
-   * Log tool execution failed
-   */
-  async logToolExecutionFailed(execution: ToolExecutionFailed): Promise<void> {
+  async getStats(): Promise<{ total: number; byStatus: Record<string, number>; byTool: Record<string, number> }> {
     try {
-      await prisma.toolExecution.update({
-        where: { id: execution.eventId },
-        data: {
-          status: 'failed',
-          error: execution.error,
-          duration: execution.duration,
-          completedAt: new Date(),
-        },
-      });
+      const redis = getAuditRedis();
+      const allEntries = await redis.lrange(`${this.keyPrefix}:log`, 0, -1);
+      const parsed = allEntries.map((e) => JSON.parse(e) as AuditEntry);
 
-      logger.error('Tool execution failed', {
-        id: execution.eventId,
-        error: execution.error,
-      });
+      const byStatus: Record<string, number> = {};
+      const byTool: Record<string, number> = {};
+
+      for (const entry of parsed) {
+        byStatus[entry.status] = (byStatus[entry.status] || 0) + 1;
+        byTool[entry.toolId] = (byTool[entry.toolId] || 0) + 1;
+      }
+
+      return { total: parsed.length, byStatus, byTool };
     } catch (error: any) {
-      logger.error('Failed to log tool execution failure', {
-        error: error.message,
-        execution,
-      });
+      logger.error({ error: error.message }, 'Failed to get audit stats');
+      return { total: 0, byStatus: {}, byTool: {} };
     }
-  }
-
-  /**
-   * Query security events
-   */
-  async querySecurityEvents(filter: {
-    toolId?: string;
-    userId?: string;
-    types?: AuditEventType[];
-    from?: Date;
-    to?: Date;
-    limit?: number;
-  }) {
-    const where: any = {};
-
-    if (filter.toolId) where.toolId = filter.toolId;
-    if (filter.userId) where.userId = filter.userId;
-    if (filter.types) where.type = { in: filter.types };
-    if (filter.from || filter.to) {
-      where.timestamp = {};
-      if (filter.from) where.timestamp.gte = filter.from;
-      if (filter.to) where.timestamp.lte = filter.to;
-    }
-
-    return prisma.securityAudit.findMany({
-      where,
-      orderBy: { timestamp: 'desc' },
-      take: filter.limit || 100,
-    });
-  }
-
-  /**
-   * Get security statistics
-   */
-  async getStats(toolId?: string) {
-    const where = toolId ? { toolId } : {};
-
-    const [total, byType] = await Promise.all([
-      prisma.securityAudit.count({ where }),
-      prisma.securityAudit.groupBy({
-        by: ['type'],
-        where,
-        _count: true,
-      }),
-    ]);
-
-    return {
-      total,
-      byType: Object.fromEntries(byType.map((t) => [t.type, t._count])),
-    };
   }
 }
 
-export const auditLogger = new AuditLogger();
+export const auditLog = new AuditLog();

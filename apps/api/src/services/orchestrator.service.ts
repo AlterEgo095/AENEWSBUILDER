@@ -11,7 +11,13 @@ import { logger } from '../config/logger.js';
 
 const openai = new OpenAI({ apiKey: config.openai.apiKey });
 const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
-const cache = new CacheService();
+let _cache: CacheService | null = null;
+function getCache(): CacheService {
+  if (!_cache) {
+    _cache = new CacheService();
+  }
+  return _cache;
+}
 
 // ============================================
 // 🔹 TYPES
@@ -66,10 +72,10 @@ export class GhostClassifier {
    * Classify project using GPT-4o-mini (cached)
    */
   async classify(prompt: string): Promise<ProjectClassification> {
-    const cacheKey = cache.generateKey('classification', prompt);
+    const cacheKey = getCache().generateKey('classification', prompt);
     
     // Check cache
-    const cached = await cache.get<ProjectClassification>(cacheKey);
+    const cached = await getCache().get<ProjectClassification>(cacheKey);
     if (cached) {
       logger.info('✅ Classification cache hit');
       return cached;
@@ -105,7 +111,7 @@ Return ONLY valid JSON, no explanations.`,
       ) as ProjectClassification;
 
       // Cache for 24h
-      await cache.set(cacheKey, classification, config.cache.ttl.classification);
+      await getCache().set(cacheKey, classification, config.cache.ttl.classification);
 
       logger.info({ classification }, '✅ Project classified');
       return classification;
@@ -129,10 +135,10 @@ export class Planner {
     prompt: string,
     classification: ProjectClassification
   ): Promise<ProjectPlan> {
-    const cacheKey = cache.generateKey('plan', { prompt, classification });
+    const cacheKey = getCache().generateKey('plan', { prompt, classification });
     
     // Check cache
-    const cached = await cache.get<ProjectPlan>(cacheKey);
+    const cached = await getCache().get<ProjectPlan>(cacheKey);
     if (cached) {
       logger.info('✅ Plan cache hit');
       return cached;
@@ -169,7 +175,7 @@ Return ONLY valid JSON.`,
       const plan = JSON.parse(content.text) as ProjectPlan;
 
       // Cache for 1h
-      await cache.set(cacheKey, plan, config.cache.ttl.plan);
+      await getCache().set(cacheKey, plan, config.cache.ttl.plan);
 
       logger.info({ plan }, '✅ Plan generated');
       return plan;

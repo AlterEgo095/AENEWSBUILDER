@@ -23,7 +23,7 @@ export async function authRoutes(app: FastifyInstance) {
     
     // TODO: Implement user creation with Prisma
     const token = app.jwt.sign({
-      userId: 'temp-user-id',
+      sub: 'temp-user-id',
       email: body.email,
     });
 
@@ -43,7 +43,7 @@ export async function authRoutes(app: FastifyInstance) {
     
     // TODO: Implement authentication with Prisma
     const token = app.jwt.sign({
-      userId: 'temp-user-id',
+      sub: 'temp-user-id',
       email: body.email,
     });
 
@@ -55,7 +55,7 @@ export async function authRoutes(app: FastifyInstance) {
 
   // Verify token
   app.get('/verify', {
-    onRequest: [app.authenticate],
+    onRequest: [(app as any).authenticate],
   }, async (request, reply) => {
     return reply.send({
       valid: true,

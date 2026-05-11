@@ -20,6 +20,7 @@
     "deploy": "chmod +x ./scripts/deploy.sh && ./scripts/deploy.sh"
   },
   "devDependencies": {
+    "@types/dockerode": "^4.0.1",
     "@types/node": "^20.12.7",
     "prettier": "^3.2.5",
     "turbo": "^2.0.0",
@@ -31,6 +32,11 @@
     "pnpm": ">=9.0.0"
   },
   "dependencies": {
-    "lru-cache": "^11.3.5"
+    "@opentelemetry/api": "^1.9.1",
+    "@sentry/node": "^10.52.0",
+    "@sentry/profiling-node": "^10.52.0",
+    "dockerode": "^5.0.0",
+    "lru-cache": "^11.3.5",
+    "prom-client": "^15.1.3"
   }
 }

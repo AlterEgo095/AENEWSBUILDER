@@ -8,7 +8,7 @@ import { EventStore } from '../workers/event-store.js';
 export async function streamRoutes(app: FastifyInstance) {
   // SSE endpoint for project events
   app.get('/:projectId', {
-    onRequest: [app.authenticate],
+    onRequest: [(app as any).authenticate],
   }, async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
 

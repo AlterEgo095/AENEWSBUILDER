@@ -27,8 +27,12 @@ import crypto from 'crypto';
 import Docker from 'dockerode';
 import { LRUCache } from 'lru-cache';
 import { z } from 'zod';
-import { logger } from '../../apps/api/src/config/logger.js';
-import { metrics } from '../../apps/api/src/observability/metrics.js';
+import pino from 'pino';
+const logger = pino({ name: '@aenews/mcp:security' });
+import {
+  mcpToolsRegistered, mcpSecurityViolations, mcpRateLimitHits,
+  mcpAnomalies, mcpInvocations, mcpPermissionDenials
+} from '../../apps/api/src/observability/metrics.js';
 
 const docker = new Docker();
 
@@ -137,7 +141,7 @@ export class ToolRegistry {
       permissions: validatedTool.permissions.length,
     });
 
-    metrics.mcpToolsRegistered.inc();
+    mcpToolsRegistered.set(1);
 
     return signedTool;
   }
@@ -156,7 +160,7 @@ export class ToolRegistry {
     if (requestNonce) {
       if (this.usedNonces.has(requestNonce)) {
         logger.error('[MCP] 🚨 NONCE REPLAY DETECTED', { toolId, nonce: requestNonce });
-        metrics.mcpSecurityViolations.inc({ type: 'nonce_replay' });
+        mcpSecurityViolations.inc({ type: 'nonce_replay' });
         return false;
       }
       this.usedNonces.set(requestNonce, true);
@@ -169,7 +173,7 @@ export class ToolRegistry {
         toolId,
         age: Math.floor(age / 1000) + 's',
       });
-      metrics.mcpSecurityViolations.inc({ type: 'expired_signature' });
+      mcpSecurityViolations.inc({ type: 'expired_signature' });
       return false;
     }
 
@@ -187,7 +191,7 @@ export class ToolRegistry {
 
     if (tool.signature !== expectedSignature) {
       logger.error('[MCP] 🚨 SIGNATURE MISMATCH', { toolId });
-      metrics.mcpSecurityViolations.inc({ type: 'invalid_signature' });
+      mcpSecurityViolations.inc({ type: 'invalid_signature' });
       return false;
     }
 
@@ -273,7 +277,7 @@ export class RateLimiter {
         limit: config.maxRequests,
         window: config.windowMs,
       });
-      metrics.mcpRateLimitHits.inc({ toolId });
+      mcpRateLimitHits.inc({ toolId });
       return false;
     }
 
@@ -336,7 +340,7 @@ export class AuditLogger {
       duration: entry.duration,
     });
 
-    metrics.mcpInvocations.inc({ toolId: entry.toolId, status: entry.result });
+    mcpInvocations.inc({ toolId: entry.toolId, status: entry.result });
 
     // In production, send to PostgreSQL / Elasticsearch
   }
@@ -415,7 +419,7 @@ export class AnomalyDetector {
         toolId,
         requestCount: recentRequests.length,
       });
-      metrics.mcpAnomalies.inc({ type: 'burst' });
+      mcpAnomalies.inc({ type: 'burst' });
       return { isAnomalous: true, reason: 'Burst requests (>50/min)' };
     }
 
@@ -427,7 +431,7 @@ export class AnomalyDetector {
         toolId,
         failureCount: failedActions.length,
       });
-      metrics.mcpAnomalies.inc({ type: 'repeated_failures' });
+      mcpAnomalies.inc({ type: 'repeated_failures' });
       return { isAnomalous: true, reason: 'Repeated failures (>10)' };
     }
 
@@ -440,7 +444,7 @@ export class AnomalyDetector {
         toolId,
         percentage: percentSameTool.toFixed(1),
       });
-      metrics.mcpAnomalies.inc({ type: 'tool_focus' });
+      mcpAnomalies.inc({ type: 'tool_focus' });
       // Not blocking, just warning
     }
 
@@ -511,7 +515,7 @@ export class CommandValidator {
     const firstWord = cmd.split(' ')[0];
     if (!this.ALLOWED_COMMANDS.has(firstWord)) {
       logger.error('[MCP] 🚨 FORBIDDEN COMMAND', { command: firstWord });
-      metrics.mcpSecurityViolations.inc({ type: 'forbidden_command' });
+      mcpSecurityViolations.inc({ type: 'forbidden_command' });
       return { valid: false, reason: `Command "${firstWord}" not allowed` };
     }
 
@@ -519,7 +523,7 @@ export class CommandValidator {
     for (const pattern of this.FORBIDDEN_PATTERNS) {
       if (pattern.test(cmd)) {
         logger.error('[MCP] 🚨 INJECTION ATTEMPT', { command: cmd, pattern: pattern.source });
-        metrics.mcpSecurityViolations.inc({ type: 'injection_attempt' });
+        mcpSecurityViolations.inc({ type: 'injection_attempt' });
         return { valid: false, reason: `Forbidden pattern detected: ${pattern.source}` };
       }
     }
@@ -550,7 +554,7 @@ export class PermissionValidator {
 
     if (missing.length > 0) {
       logger.warn('[MCP] Permission denied', { toolId, missing });
-      metrics.mcpPermissionDenials.inc({ toolId });
+      mcpPermissionDenials.inc({ toolId });
     }
 
     return {

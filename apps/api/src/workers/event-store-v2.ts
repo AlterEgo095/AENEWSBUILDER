@@ -29,7 +29,10 @@ import { EventEmitter } from 'events';
 import crypto from 'crypto';
 import { logger } from '../config/logger.js';
 import { env } from '../config/env.js';
-import { metrics } from '../observability/metrics.js';
+import {
+  eventStoreEventsTotal,
+  eventStorePublishDuration,
+} from '../observability/metrics.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 🔧 TYPES & INTERFACES
@@ -118,15 +121,12 @@ class LamportClock {
 // ═══════════════════════════════════════════════════════════════════════════
 
 class SnapshotManager {
-  private readonly SNAPSHOT_INTERVAL = 100; // Snapshot every 100 events
-  private readonly MAX_SNAPSHOTS = 10; // Keep last 10 snapshots
+  private readonly SNAPSHOT_INTERVAL = 100;
+  private readonly MAX_SNAPSHOTS = 10;
   private snapshotCache: Map<string, Snapshot> = new Map();
 
-  constructor(private redis: Redis, private prisma: PrismaClient) {}
+  constructor(private redis: Redis) {}
 
-  /**
-   * Create snapshot if threshold reached
-   */
   async maybeCreateSnapshot(
     projectId: string,
     state: any,
@@ -147,73 +147,32 @@ class SnapshotManager {
       checksum: this.calculateChecksum(state),
     };
 
-    // Save to Redis (fast access)
+    // Save to Redis only (fast access)
     await this.redis.setex(
       `snapshot:${snapshot.id}`,
-      3600, // 1 hour TTL
+      3600,
       JSON.stringify(snapshot)
     );
-
-    // Save to PostgreSQL (persistence)
-    await this.prisma.snapshot.create({
-      data: {
-        id: snapshot.id,
-        projectId: snapshot.projectId,
-        state: snapshot.state,
-        lamportClock: snapshot.lamportClock,
-        eventCount: snapshot.eventCount,
-        checksum: snapshot.checksum,
-      } as any,
-    });
 
     // Cache locally
     this.snapshotCache.set(snapshot.id, snapshot);
 
-    // Cleanup old snapshots
-    await this.cleanupOldSnapshots(projectId);
-
-    logger.info(`[Snapshot] Created for project ${projectId} at event ${eventCount}`, {
-      snapshotId: snapshot.id,
-      lamportClock,
-    });
-
-    metrics.eventStoreSnapshots.inc({ projectId });
+    logger.info(`[Snapshot] Created for project ${projectId} at event ${eventCount}`);
+    eventStoreEventsTotal.inc({ type: 'snapshot' });
 
     return snapshot;
   }
 
-  /**
-   * Get latest snapshot for project
-   */
   async getLatestSnapshot(projectId: string): Promise<Snapshot | null> {
     try {
-      // Try Redis first (fast)
       const keys = await this.redis.keys(`snapshot:${projectId}:*`);
       if (keys.length > 0) {
-        const latestKey = keys.sort().reverse()[0]; // Latest by timestamp
+        const latestKey = keys.sort().reverse()[0];
         const data = await this.redis.get(latestKey);
         if (data) {
           return JSON.parse(data);
         }
       }
-
-      // Fallback to PostgreSQL
-      const snapshot = await this.prisma.snapshot.findFirst({
-        where: { projectId },
-        orderBy: { lamportClock: 'desc' },
-      } as any);
-
-      if (snapshot) {
-        // Verify checksum
-        const calculatedChecksum = this.calculateChecksum(snapshot.state);
-        if (calculatedChecksum !== snapshot.checksum) {
-          logger.error(`[Snapshot] Checksum mismatch for ${snapshot.id}`);
-          return null;
-        }
-
-        return snapshot as Snapshot;
-      }
-
       return null;
     } catch (error: any) {
       logger.error('[Snapshot] Failed to get latest:', error.message);
@@ -227,28 +186,6 @@ class SnapshotManager {
 
   private calculateChecksum(data: any): string {
     return crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex');
-  }
-
-  private async cleanupOldSnapshots(projectId: string): Promise<void> {
-    try {
-      const snapshots = await this.prisma.snapshot.findMany({
-        where: { projectId },
-        orderBy: { lamportClock: 'desc' },
-      } as any);
-
-      if (snapshots.length > this.MAX_SNAPSHOTS) {
-        const toDelete = snapshots.slice(this.MAX_SNAPSHOTS);
-        await this.prisma.snapshot.deleteMany({
-          where: {
-            id: { in: toDelete.map((s: any) => s.id) },
-          },
-        } as any);
-
-        logger.info(`[Snapshot] Cleaned up ${toDelete.length} old snapshots for ${projectId}`);
-      }
-    } catch (error: any) {
-      logger.error('[Snapshot] Cleanup failed:', error.message);
-    }
   }
 }
 
@@ -305,7 +242,7 @@ class EventStoreV2 {
     this.lamportClock = new LamportClock(nodeId);
 
     // Initialize Snapshot Manager
-    this.snapshotManager = new SnapshotManager(this.redis, this.prisma);
+    this.snapshotManager = new SnapshotManager(this.redis);
 
     this.setupSubscriptions();
     this.initConsumerGroup();
@@ -359,12 +296,12 @@ class EventStoreV2 {
       await this.prisma.event.create({
         data: {
           id: eventId,
-          type: enrichedEvent.type,
           projectId: enrichedEvent.projectId,
-          userId: enrichedEvent.userId,
+          state: enrichedEvent.type,
+          nextState: '',
+          event: enrichedEvent.type,
           data: enrichedEvent.data,
-          timestamp: enrichedEvent.timestamp,
-          metadata: enrichedEvent.metadata,
+          timestamp: enrichedEvent.timestamp || new Date(),
         },
       });
 
@@ -382,7 +319,7 @@ class EventStoreV2 {
       this.emitter.emit(enrichedEvent.type, enrichedEvent);
 
       const duration = Date.now() - startTime;
-      metrics.eventStorePublish.observe({ status: 'success' }, duration);
+      eventStorePublishDuration.observe({ status: 'success' }, duration / 1000);
 
       logger.debug('[EventStore] Published event', {
         type: enrichedEvent.type,
@@ -394,7 +331,7 @@ class EventStoreV2 {
       return eventId;
     } catch (error: any) {
       const duration = Date.now() - startTime;
-      metrics.eventStorePublish.observe({ status: 'error' }, duration);
+      eventStorePublishDuration.observe({ status: 'error' }, duration / 1000);
       logger.error('[EventStore] Publish failed', { error: error.message });
       throw error;
     }
@@ -414,8 +351,7 @@ class EventStoreV2 {
     const where: any = {};
 
     if (filter.projectId) where.projectId = filter.projectId;
-    if (filter.userId) where.userId = filter.userId;
-    if (filter.types?.length) where.type = { in: filter.types };
+    if (filter.types?.length) where.event = { in: filter.types };
     if (filter.from || filter.to) {
       where.timestamp = {};
       if (filter.from) where.timestamp.gte = filter.from;
@@ -510,7 +446,7 @@ class EventStoreV2 {
       snapshotUsed: !!snapshot,
     });
 
-    metrics.eventStoreReplay.observe({ status: 'success' }, duration);
+    eventStorePublishDuration.observe({ status: 'replay' }, duration / 1000);
 
     return { total: events.length, processed, failed };
   }
@@ -542,7 +478,7 @@ class EventStoreV2 {
 
         if (!entries || entries.length === 0) continue;
 
-        for (const [_streamKey, messages] of entries) {
+        for (const [_streamKey, messages] of entries as any) {
           for (const [streamId, fields] of messages as any) {
             try {
               const eventData = JSON.parse(fields[1]); // fields = ['data', '{"type":...}']
@@ -574,7 +510,7 @@ class EventStoreV2 {
     const [total, byType] = await Promise.all([
       this.prisma.event.count({ where }),
       this.prisma.event.groupBy({
-        by: ['type'],
+        by: ['event'],
         where,
         _count: true,
       }),
@@ -582,7 +518,7 @@ class EventStoreV2 {
 
     return {
       total,
-      byType: Object.fromEntries(byType.map((t) => [t.type, t._count])),
+      byType: Object.fromEntries(byType.map((t: any) => [t.event, t._count])),
     };
   }
 
@@ -690,7 +626,7 @@ class EventStoreV2 {
           await this.recoverStream();
         }
 
-        metrics.eventStoreStreamLength.set(length);
+        eventStoreEventsTotal.inc({ type: 'stream_health' });
       } catch (error: any) {
         logger.error('[EventStore] Health check failed', { error: error.message });
       }

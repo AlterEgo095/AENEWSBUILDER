@@ -151,4 +151,172 @@ export const circuitBreakerTrips = new Counter({
   registers: [metricsRegistry],
 });
 
+
+// AI Cost & Cache Metrics (used by ai-failover.ts)
+export const aiCost = new Counter({
+  name: 'ai_cost_usd',
+  help: 'AI cost in USD',
+  labelNames: ['type'],
+  registers: [metricsRegistry],
+});
+
+export const aiCostAlerts = new Counter({
+  name: 'ai_cost_alerts_total',
+  help: 'AI cost alerts',
+  labelNames: ['type'],
+  registers: [metricsRegistry],
+});
+
+export const aiCacheHits = new Counter({
+  name: 'ai_cache_hits_total',
+  help: 'AI cache hits',
+  registers: [metricsRegistry],
+});
+
+export const aiCacheMisses = new Counter({
+  name: 'ai_cache_misses_total',
+  help: 'AI cache misses',
+  registers: [metricsRegistry],
+});
+
+export const aiRequests = new Counter({
+  name: 'ai_requests_total',
+  help: 'Total AI requests',
+  labelNames: ['provider', 'model', 'status'],
+  registers: [metricsRegistry],
+});
+
+export const aiLatency = new Histogram({
+  name: 'ai_latency_seconds',
+  help: 'AI request latency',
+  labelNames: ['provider'],
+  buckets: [0.5, 1, 2, 5, 10, 20, 30, 60],
+  registers: [metricsRegistry],
+});
+
+// Redis Metrics (used by bull-config.ts)
+export const redisConnections = new Gauge({
+  name: 'redis_connections',
+  help: 'Redis connections',
+  labelNames: ['client', 'status'],
+  registers: [metricsRegistry],
+});
+
+export const redisMemoryUsage = new Gauge({
+  name: 'redis_memory_usage_percent',
+  help: 'Redis memory usage percent',
+  registers: [metricsRegistry],
+});
+
+// Queue Metrics (used by bull-config.ts)
+export const queueErrors = new Counter({
+  name: 'queue_errors_total',
+  help: 'Queue errors',
+  labelNames: ['queue'],
+  registers: [metricsRegistry],
+});
+
+export const jobsProcessed = new Counter({
+  name: 'jobs_processed_total',
+  help: 'Jobs processed',
+  labelNames: ['queue', 'status'],
+  registers: [metricsRegistry],
+});
+
+export const jobsStalled = new Counter({
+  name: 'jobs_stalled_total',
+  help: 'Jobs stalled',
+  labelNames: ['queue'],
+  registers: [metricsRegistry],
+});
+
+export const workerErrors = new Counter({
+  name: 'worker_errors_total',
+  help: 'Worker errors',
+  labelNames: ['worker'],
+  registers: [metricsRegistry],
+});
+
+export const dlqJobs = new Counter({
+  name: 'dlq_jobs_total',
+  help: 'Dead letter queue jobs',
+  labelNames: ['queue'],
+  registers: [metricsRegistry],
+});
+
+// Sandbox Advanced Metrics (used by warm-pool.ts)
+export const sandboxSecurityBreaches = new Counter({
+  name: 'sandbox_security_breaches_total',
+  help: 'Sandbox security breaches',
+  labelNames: ['type'],
+  registers: [metricsRegistry],
+});
+
+export const sandboxMemoryLeaks = new Counter({
+  name: 'sandbox_memory_leaks_total',
+  help: 'Sandbox memory leaks detected',
+  registers: [metricsRegistry],
+});
+
+export const sandboxZombiesKilled = new Counter({
+  name: 'sandbox_zombies_killed_total',
+  help: 'Sandbox zombies killed',
+  registers: [metricsRegistry],
+});
+
+export const sandboxDiskUsage = new Gauge({
+  name: 'sandbox_disk_usage_percent',
+  help: 'Sandbox disk usage percent',
+  registers: [metricsRegistry],
+});
+
+export const sandboxAcquireTime = new Histogram({
+  name: 'sandbox_acquire_time_seconds',
+  help: 'Time to acquire sandbox container',
+  buckets: [0.01, 0.05, 0.1, 0.5, 1, 5],
+  registers: [metricsRegistry],
+});
+
+// MCP Security Metrics (used by packages/mcp/security.ts)
+export const mcpToolsRegistered = new Gauge({
+  name: 'mcp_tools_registered',
+  help: 'Number of registered MCP tools',
+  registers: [metricsRegistry],
+});
+
+export const mcpSecurityViolations = new Counter({
+  name: 'mcp_security_violations_total',
+  help: 'MCP security violations',
+  labelNames: ['type', 'tool'],
+  registers: [metricsRegistry],
+});
+
+export const mcpRateLimitHits = new Counter({
+  name: 'mcp_rate_limit_hits_total',
+  help: 'MCP rate limit hits',
+  labelNames: ['tool'],
+  registers: [metricsRegistry],
+});
+
+export const mcpAnomalies = new Counter({
+  name: 'mcp_anomalies_total',
+  help: 'MCP anomalies detected',
+  labelNames: ['type'],
+  registers: [metricsRegistry],
+});
+
+export const mcpInvocations = new Counter({
+  name: 'mcp_invocations_total',
+  help: 'MCP tool invocations',
+  labelNames: ['tool', 'status'],
+  registers: [metricsRegistry],
+});
+
+export const mcpPermissionDenials = new Counter({
+  name: 'mcp_permission_denials_total',
+  help: 'MCP permission denials',
+  labelNames: ['tool'],
+  registers: [metricsRegistry],
+});
+
 logger.info('✅ Prometheus metrics initialized');

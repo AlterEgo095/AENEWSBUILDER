@@ -2,7 +2,9 @@
  * MCP Adapter - Universal Tool Execution Interface
  */
 
-import { logger } from '../config/logger.js';
+import pino from 'pino';
+
+export const logger = pino({ name: '@aenews/mcp' });
 import { MCPRegistry } from './registry.js';
 import { spawn } from 'child_process';
 

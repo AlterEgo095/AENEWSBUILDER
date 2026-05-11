@@ -17,6 +17,8 @@ const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
   REDIS_PASSWORD: z.string().optional(),
+  REDIS_HOST: z.string().default('localhost'),
+  REDIS_PORT: z.string().transform(Number).default('6379'),
   
   // JWT
   JWT_SECRET: z.string().min(32),
@@ -66,7 +68,7 @@ const envSchema = z.object({
   COST_ALERT_THRESHOLD_DAILY: z.string().transform(Number).default('10'),
 });
 
-const env = envSchema.parse(process.env);
+export const env = envSchema.parse(process.env);
 
 export const config = {
   server: {
@@ -79,6 +81,8 @@ export const config = {
   },
   redis: {
     url: env.REDIS_URL,
+    host: env.REDIS_HOST,
+    port: env.REDIS_PORT,
     password: env.REDIS_PASSWORD,
   },
   jwt: {

@@ -59,19 +59,20 @@ function App() {
     if (!prompt.trim()) return;
 
     try {
+      const name = prompt.substring(0, 50).split(' ').slice(0, 3).join(' ');
+
       const response = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
-          framework: 'react',
-          style: 'modern',
+          name,
         }),
       });
 
       const data = await response.json();
 
-      const newJobId = data.jobId;
+      const newJobId = data.projectId;
 
       setProjectState({
         jobId: newJobId,
