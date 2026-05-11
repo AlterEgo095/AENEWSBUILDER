@@ -25,3 +25,28 @@ export { default as VercelAdapter } from '../tools/vercel.js';
 
 // Security (decoupled metrics)
 export { setMetricsProvider } from '../security.js';
+
+// Universal Catalog & Adapter
+export {
+  mcpCatalog,
+  MCP_CATEGORIES,
+  getCatalogByCategory,
+  searchCatalog,
+  getCatalogEntry,
+  getRequiredEnvVars,
+  getCatalogStats,
+  getCatalogByStatus,
+  getUniqueTransports,
+  getUsedCategories,
+  type MCPCatalogEntry,
+  type MCPCategory,
+  type MCPTransport,
+  type MCPOrigin,
+  type MCPStatus,
+} from '../catalog.js';
+
+export {
+  UniversalMCPAdapter,
+  type MCPToolCall,
+  type MCPResult,
+} from '../universal-adapter.js';
