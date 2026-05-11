@@ -1,37 +1,192 @@
+AENEWS BUILDER v3.0.0 — Industrial AI Operating System
+=====================================================
+
+Monorepo Structure (pnpm + Turborepo)
+-------------------------------------
+
 .
-./package.json
-./turbo.json
-./.gitignore
-./.env.example
-./apps
-./apps/api
-./apps/api/package.json
-./apps/api/tsconfig.json
-./apps/api/src
-./apps/api/prisma
-./apps/api/Dockerfile
-./apps/studio
-./apps/studio/package.json
-./packages
-./packages/shared
-./packages/ui
-./packages/mcp
-./packages/mcp/adapter.ts
-./packages/mcp/registry.ts
-./scripts
-./scripts/deploy.sh
-./.github
-./docker
-./docker/nginx
-./docker/nginx/nginx.conf
-./docker/prometheus
-./docker/prometheus/prometheus.yml
-./docker/grafana
-./docker/grafana/provisioning
-./secrets
-./docker-compose.yml
-./README.md
-./LICENSE
-./.git
-./POST-DEPLOYMENT.md
-./STRUCTURE.txt
+├── package.json                    # Root workspace config
+├── pnpm-workspace.yaml             # Workspace definitions
+├── turbo.json                      # Turborepo pipeline
+├── docker-compose.yml              # 8 services (Postgres, Redis, API, Studio, Admin, Nginx, Prometheus, Grafana)
+├── Dockerfile                      # Root monorepo build
+├── .env.example                    # 200+ configurable env vars
+├── STRUCTURE.txt                   # This file
+├── README.md                       # Main documentation
+├── LICENSE                         # MIT
+│
+├── apps/
+│   ├── api/                        # @aenews/api — API Gateway (Fastify, Port 3001)
+│   │   ├── package.json
+│   │   ├── tsconfig.json
+│   │   ├── Dockerfile              # 3-stage (deps → build → run)
+│   │   ├── prisma/
+│   │   │   ├── schema.prisma       # User, Project, Event, CostRecord
+│   │   │   └── migrations/
+│   │   ├── src/
+│   │   │   ├── index.ts            # Fastify bootstrap, JWT RS256, routes
+│   │   │   ├── config/
+│   │   │   │   ├── env.ts          # Zod-validated env config
+│   │   │   │   ├── logger.ts       # Pino logger
+│   │   │   │   └── prisma.ts       # Prisma client singleton
+│   │   │   ├── middleware/
+│   │   │   │   └── error-handler.ts
+│   │   │   ├── routes/
+│   │   │   │   ├── admin.routes.ts # Admin CRUD API (1200+ lines)
+│   │   │   │   ├── auth.routes.ts  # JWT auth + register
+│   │   │   │   ├── engine.routes.ts# Security scan, context memory, plan versioning
+│   │   │   │   ├── health.routes.ts
+│   │   │   │   ├── project.routes.ts
+│   │   │   │   └── stream.routes.ts# SSE with dual-layer replay
+│   │   │   ├── services/
+│   │   │   │   ├── ai-failover.ts  # Hystrix circuit breaker + cascade
+│   │   │   │   ├── context-memory.ts # Dual-layer (Prisma + Redis)
+│   │   │   │   ├── orchestrator.service.ts # Ghost Classifier + Planner
+│   │   │   │   ├── plan-versioning.ts # Redis-backed versioning
+│   │   │   │   ├── redis.service.ts
+│   │   │   │   └── security-engine.ts # 25+ OWASP rules
+│   │   │   ├── workers/
+│   │   │   │   ├── index.ts        # L4 Core State Machine (auto-chaining)
+│   │   │   │   ├── auto-healing.ts # 3-retry model escalation
+│   │   │   │   ├── cost-tracker.ts # Redis cost tracking
+│   │   │   │   ├── deployer.ts     # Vercel + Cloudflare + Railway
+│   │   │   │   ├── event-store.ts  # V1 Redis pub/sub
+│   │   │   │   ├── event-store-v2.ts # V2 Lamport + Redis Streams
+│   │   │   │   ├── generator.ts    # Context-aware code generation
+│   │   │   │   ├── mcp-executor.ts # 8 MCP tool handlers
+│   │   │   │   ├── sandbox-manager.ts # Docker sandbox adapter
+│   │   │   │   └── templates.ts    # 10 framework templates
+│   │   │   ├── queue/
+│   │   │   │   ├── bull-config.ts  # BullMQ configuration
+│   │   │   │   └── project-queue.ts
+│   │   │   ├── observability/
+│   │   │   │   ├── metrics.ts      # Prometheus 40+ metrics
+│   │   │   │   ├── sentry.ts       # Sentry error tracking
+│   │   │   │   └── tracing.ts      # OpenTelemetry tracing
+│   │   │   └── sandbox/
+│   │   │       └── warm-pool.ts    # Docker warm pool (3-50 containers)
+│   │   └── tests/
+│   │       ├── e2e/
+│   │       └── load/
+│   │
+│   ├── studio/                     # @aenews/studio — AI Code Gen IDE (React 19, Port 5173)
+│   │   ├── package.json
+│   │   ├── tsconfig.json
+│   │   ├── vite.config.ts
+│   │   ├── tailwind.config.js
+│   │   ├── Dockerfile              # Nginx static serving
+│   │   └── src/
+│   │       ├── main.tsx
+│   │       ├── App.tsx             # Project creation + Terminal + Preview
+│   │       ├── hooks/
+│   │       │   └── useSSE.ts       # Server-Sent Events hook
+│   │       └── components/
+│   │           ├── AuthForm.tsx
+│   │           ├── JobManager.tsx
+│   │           ├── Preview.tsx
+│   │           └── Terminal.tsx
+│   │
+│   └── admin/                      # @aenews/admin — Admin Dashboard (React 19, Port 5174)
+│       ├── package.json
+│       ├── tsconfig.json
+│       ├── vite.config.ts
+│       ├── tailwind.config.js
+│       ├── Dockerfile              # Nginx static serving
+│       └── src/
+│           ├── main.tsx
+│           ├── App.tsx             # Router with lazy loading
+│           ├── types/
+│           │   └── index.ts
+│           ├── lib/
+│           │   └── api.ts          # API client with JWT auth
+│           ├── hooks/
+│           │   ├── useApi.ts
+│           │   └── useAuth.ts
+│           ├── data/
+│           │   ├── mock-data.ts    # Fallback data for demo mode
+│           │   └── mcp-categories.ts
+│           ├── pages/
+│           │   ├── Dashboard.tsx   # Platform overview + charts
+│           │   ├── Projects.tsx    # Project management table
+│           │   ├── ProjectDetail.tsx
+│           │   ├── Jobs.tsx        # BullMQ job management
+│           │   ├── Users.tsx       # User CRUD
+│           │   ├── MCPTools.tsx    # MCP tool catalog + toggles
+│           │   ├── Monitoring.tsx  # System health + metrics
+│           │   ├── Costs.tsx       # Cost analytics
+│           │   └── Settings.tsx    # Platform configuration
+│           └── components/
+│               ├── AuthForm.tsx
+│               ├── charts/         # Recharts wrappers
+│               │   ├── AreaChart.tsx
+│               │   ├── BarChart.tsx
+│               │   ├── DonutChart.tsx
+│               │   └── Sparkline.tsx
+│               ├── layout/
+│               │   ├── Layout.tsx
+│               │   ├── Sidebar.tsx
+│               │   └── Header.tsx
+│               └── ui/             # Design system components
+│                   ├── Badge.tsx
+│                   ├── Button.tsx
+│                   ├── Card.tsx
+│                   ├── Modal.tsx
+│                   ├── Progress.tsx
+│                   ├── Skeleton.tsx
+│                   ├── StatsCard.tsx
+│                   ├── Table.tsx
+│                   └── Toast.tsx
+│
+├── packages/
+│   └── mcp/                        # @aenews/mcp — MCP Tools Library
+│       ├── package.json
+│       ├── tsconfig.json
+│       ├── src/
+│       │   └── index.ts            # Re-exports all modules
+│       ├── adapter.ts              # Docker-containerized execution
+│       ├── registry.ts             # Tool registration
+│       ├── security.ts             # HMAC-SHA256, rate limiting, anomaly detection
+│       ├── audit-log.ts            # Redis audit logging
+│       ├── catalog.ts              # 200+ community MCP catalog (17 categories)
+│       ├── universal-adapter.ts    # stdio + SSE transport
+│       └── tools/
+│           ├── github.ts
+│           ├── vercel.ts
+│           ├── deploy.ts
+│           ├── figma.ts
+│           ├── notion.ts
+│           ├── playwright.ts
+│           ├── prisma.ts
+│           ├── replicate.ts
+│           ├── slack.ts
+│           ├── supabase.ts
+│           ├── websearch.ts
+│           ├── prometheus.ts
+│           ├── dev-tools.ts         # 7 dev tools (CodeSandbox, Git, etc.)
+│           ├── cloud-tools.ts      # 10 cloud tools (AWS, K8s, etc.)
+│           ├── database-tools.ts   # 16 database tools
+│           ├── browser-tools.ts    # 4 browser tools
+│           ├── communication-tools.ts # 11 communication tools
+│           └── multimedia-tools.ts  # 6 multimedia tools
+│
+├── docker/
+│   ├── nginx/
+│   │   └── nginx.conf              # Reverse proxy (Studio + Admin + API + SSE)
+│   └── prometheus/
+│       └── prometheus.yml          # API metrics scraping
+│
+├── docs/
+│   ├── VPS-DEPLOYMENT-GUIDE.md
+│   ├── HARDENING-REPORT.md
+│   └── GRAFANA-DASHBOARDS.json
+│
+├── scripts/
+│   ├── deploy.sh                   # VPS deployment script
+│   └── chaos/                      # Chaos engineering tests
+│
+├── .github/
+│   └── workflows/
+│       └── ci-cd.yml               # GitHub Actions CI/CD pipeline
+│
+└── secrets/
+    └── .gitkeep

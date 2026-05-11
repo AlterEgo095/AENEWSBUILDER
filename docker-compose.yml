@@ -99,6 +99,24 @@ services:
       - aenews_network
 
   # ============================================
+  # ADMIN DASHBOARD
+  # ============================================
+  admin:
+    build:
+      context: .
+      dockerfile: ./apps/admin/Dockerfile
+    container_name: aenews-admin
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    ports:
+      - "5174:5174"
+    depends_on:
+      - api
+    networks:
+      - aenews_network
+
+  # ============================================
   # NGINX REVERSE PROXY
   # ============================================
   nginx:
@@ -113,6 +131,7 @@ services:
     depends_on:
       - api
       - studio
+      - admin
     networks:
       - aenews_network
 
