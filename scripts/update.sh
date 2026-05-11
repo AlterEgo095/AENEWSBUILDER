@@ -91,7 +91,9 @@ if curl -sf http://localhost/api/health > /dev/null 2>&1; then
     docker image prune -f --filter "label=com.docker.compose.project=aenews" 2>/dev/null || true
 else
     echo -e "${RED}❌ Update failed — health check did not pass${NC}"
-    echo -e "${YELLOW}Rolling back...${NC}"
+    echo -e "${YELLOW}Rolling back application code...${NC}"
+    echo -e "${YELLOW}⚠️  Note: Database migrations are forward-only and NOT reverted.${NC}"
+    echo -e "${YELLOW}   If schema changed, manual intervention may be required.${NC}"
     git checkout HEAD~1 -- . 2>/dev/null || true
     docker compose up -d --build
     echo -e "${YELLOW}Check logs: docker compose logs -f api${NC}"

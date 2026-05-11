@@ -473,7 +473,7 @@ JWT_SECRET=your-super-secure-secret-min-64-chars
 
 ```bash
 # Demarrer l'infrastructure (PostgreSQL + Redis)
-docker-compose up -d postgres redis
+docker compose up -d postgres redis
 
 # Generer Prisma Client
 cd apps/api && npx prisma generate
@@ -500,7 +500,7 @@ pnpm dev
 pnpm build
 
 # Demarrer tous les services
-docker-compose up -d
+docker compose up -d
 ```
 
 ---
@@ -545,8 +545,8 @@ cd /opt/aenews-builder
 
 git clone https://github.com/AlterEgo095/AENEWSBUILDER.git .
 cp .env.example .env && nano .env
-docker-compose up -d
-docker-compose logs -f
+docker compose up -d
+docker compose logs -f
 ```
 
 ---

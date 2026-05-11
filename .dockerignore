@@ -71,7 +71,7 @@ docker-compose.override.yml
 *.sqlite
 *.db
 
-# Lock files (use pnpm-lock.yaml only)
-package-lock.json
+# Lock files (use package-lock.json only)
 yarn.lock
 bun.lock
+pnpm-lock.yaml

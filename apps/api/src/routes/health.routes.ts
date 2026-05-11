@@ -54,7 +54,7 @@ export async function healthRoutes(app: FastifyInstance) {
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       services,
-      version: '3.1.0',
+      version: '3.0.0',
     });
   });
 

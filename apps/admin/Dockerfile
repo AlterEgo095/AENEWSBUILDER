@@ -44,6 +44,11 @@ RUN echo 'server { \
     } \
 }' > /etc/nginx/conf.d/default.conf
 
+RUN apk add --no-cache wget
+
 EXPOSE 5174
+
+HEALTHCHECK --interval=15s --timeout=3s --retries=3 --start-period=5s \
+  CMD wget -qO- http://localhost:5174/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]
