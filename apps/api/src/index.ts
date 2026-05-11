@@ -19,10 +19,15 @@ import { errorHandler } from './middleware/error-handler.js';
 import { metricsRegistry } from './observability/metrics.js';
 import { authRoutes } from './routes/auth.routes.js';
 import { projectRoutes } from './routes/project.routes.js';
+import { engineRoutes } from './routes/engine.routes.js';
 import { streamRoutes } from './routes/stream.routes.js';
 import { healthRoutes } from './routes/health.routes.js';
 import { initRedis } from './services/redis.service.js';
 import { initWorker } from './workers/index.js';
+import { initSentry, captureException } from './observability/sentry.js';
+import { securityEngine } from './services/security-engine.js';
+import { contextMemory } from './services/context-memory.js';
+import { planVersioning } from './services/plan-versioning.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -42,6 +47,12 @@ async function bootstrap() {
   });
 
   try {
+    // ============================================
+    // 📡 OBSERVABILITY - SENTRY
+    // ============================================
+
+    initSentry();
+
     // ============================================
     // 🔐 SECURITY LAYER
     // ============================================
@@ -184,6 +195,7 @@ async function bootstrap() {
     await app.register(healthRoutes, { prefix: '/api/health' });
     await app.register(authRoutes, { prefix: '/api/auth' });
     await app.register(projectRoutes, { prefix: '/api/projects' });
+    await app.register(engineRoutes, { prefix: '/api/engine' });
     await app.register(streamRoutes, { prefix: '/api/stream' });
 
     // Prometheus Metrics
@@ -208,11 +220,14 @@ async function bootstrap() {
     });
 
     // ============================================
-    // 🚀 INITIALIZE WORKER ENGINE
+    // 🚀 INITIALIZE WORKER ENGINE + ENGINES
     // ============================================
     
     await initWorker();
-    app.log.info('✅ Worker Engine initialized');
+    app.log.info('Worker Engine initialized');
+    app.log.info('Security Engine ready');
+    app.log.info('Context Memory Engine ready');
+    app.log.info('Plan Versioning Engine ready');
 
     // ============================================
     // 🎯 START SERVER

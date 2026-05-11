@@ -6,6 +6,9 @@
 import { Worker, Queue, Job } from 'bullmq';
 import { getRedis } from '../services/redis.service.js';
 import { Orchestrator } from '../services/orchestrator.service.js';
+import { securityEngine } from '../services/security-engine.js';
+import { contextMemory } from '../services/context-memory.js';
+import { planVersioning } from '../services/plan-versioning.js';
 import { Generator } from './generator.js';
 import { SandboxManager } from './sandbox-manager.js';
 import { AutoHealing } from './auto-healing.js';
@@ -224,7 +227,26 @@ export class WorkerEngine {
   }
 
   private async handlePlanning(job: Job<ProjectJob>, sm: StateMachine): Promise<void> {
-    const { plan } = job.data.context;
+    const { plan, classification } = job.data.context;
+    
+    // Save initial plan version
+    try {
+      await planVersioning.savePlanVersion(job.data.projectId, plan, 'initial');
+      logger.info({ projectId: job.data.projectId }, 'Plan v1 saved');
+    } catch (err: any) {
+      logger.warn({ error: err.message }, 'Failed to save plan version');
+    }
+
+    // Store generation pattern for cross-project learning
+    try {
+      await contextMemory.storeGenerationPattern(
+        job.data.prompt,
+        classification,
+        plan
+      );
+    } catch (err: any) {
+      logger.warn({ error: err.message }, 'Failed to store generation pattern');
+    }
     
     // Decide next step: MCP or direct generation
     const nextState = plan.mcpTools?.length > 0 ? 'EXECUTE_MCP' : 'GENERATE';
@@ -284,11 +306,66 @@ export class WorkerEngine {
 
   private async handleTest(job: Job<ProjectJob>, sm: StateMachine): Promise<void> {
     const { files } = job.data.context;
-    
+
+    // Run security scan on generated code
+    logger.info({ projectId: job.data.projectId }, 'Running security scan...');
+    const securityResult = await securityEngine.scanProject(files);
+
+    if (!securityResult.passed) {
+      logger.warn(
+        { projectId: job.data.projectId, score: securityResult.totalScore, vulnerabilities: securityResult.summary },
+        'Security scan FAILED'
+      );
+
+      await job.updateData({
+        ...job.data,
+        context: {
+          ...job.data.context,
+          securityResult,
+          errors: [
+            ...(job.data.context.errors || []),
+            `Security scan failed: score ${securityResult.totalScore}/100, ${securityResult.summary.critical} critical, ${securityResult.summary.high} high vulnerabilities`,
+          ],
+        },
+        state: 'FIX',
+        updatedAt: new Date().toISOString(),
+      });
+      await sm.transition('FIX', 'security_scan_failed', securityResult);
+      return;
+    }
+
+    logger.info(
+      { projectId: job.data.projectId, score: securityResult.totalScore },
+      'Security scan PASSED'
+    );
+
     // Run tests in warm sandbox
     const testResults = await this.sandboxManager.runTests(files);
 
     if (testResults.success) {
+      // Store project context in memory engine for future learning
+      try {
+        await contextMemory.storeProjectContext(job.data.projectId, {
+          projectId: job.data.projectId,
+          classification: job.data.context.classification,
+          plan: job.data.context.plan,
+          files: job.data.context.files || {},
+          decisions: job.data.context.decisions || [],
+          errors: job.data.context.errors || [],
+          resolutions: [],
+          mcpResults: job.data.context.mcpResults || {},
+          metadata: {
+            totalFiles: Object.keys(job.data.context.files || {}).length,
+            totalTokens: 0,
+            totalCost: 0,
+            generationTime: Date.now() - new Date(job.data.createdAt).getTime(),
+          },
+          updatedAt: new Date(),
+        });
+      } catch (err: any) {
+        logger.warn({ error: err.message }, 'Failed to store project context');
+      }
+
       await job.updateData({
         ...job.data,
         context: {
@@ -316,8 +393,18 @@ export class WorkerEngine {
   }
 
   private async handleFix(job: Job<ProjectJob>, sm: StateMachine): Promise<void> {
-    const { errors, files } = job.data.context;
-    
+    const { errors, files, plan, retryCount } = job.data.context;
+
+    // Save plan version before fix (for rollback)
+    if (plan && retryCount < 3) {
+      try {
+        await planVersioning.savePlanVersion(job.data.projectId, plan, 'auto_heal');
+        logger.info({ projectId: job.data.projectId, retryCount }, 'Plan version saved before auto-heal');
+      } catch (err: any) {
+        logger.warn({ error: err.message }, 'Failed to save plan version');
+      }
+    }
+
     // Auto-healing attempts
     const fixed = await this.autoHealing.fix(files, errors, job.data.retryCount);
 
