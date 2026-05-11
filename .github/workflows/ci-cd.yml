@@ -2,7 +2,7 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -68,7 +68,7 @@ jobs:
         env:
           POSTGRES_USER: aenews_test
           POSTGRES_PASSWORD: test_password
-          POSTGRES_DB: aenews_test
+          POSTGRES_DB: aenews_builder
         ports:
           - 5432:5432
         options: >-
@@ -102,20 +102,22 @@ jobs:
       - name: Generate Prisma Client
         run: cd apps/api && npx prisma generate
         env:
-          DATABASE_URL: postgresql://aenews_test:test_password@localhost:5432/aenews_test
+          DATABASE_URL: postgresql://aenews_test:test_password@localhost:5432/aenews_builder
 
       - name: Run Tests
         run: pnpm run test
         env:
-          DATABASE_URL: postgresql://aenews_test:test_password@localhost:5432/aenews_test
+          DATABASE_URL: postgresql://aenews_test:test_password@localhost:5432/aenews_builder
           REDIS_URL: redis://localhost:6379
-          JWT_SECRET: test-secret-for-ci
-          OPENAI_API_KEY: test-key
-          ANTHROPIC_API_KEY: test-key
+          JWT_SECRET: test-secret-for-ci-that-is-long-enough-32chars
+          OPENAI_API_KEY: sk-test-key
+          ANTHROPIC_API_KEY: sk-ant-test-key
+          FRONTEND_URL: http://localhost:5173
+          CORS_ORIGINS: http://localhost:5173
           NODE_ENV: test
 
   # ============================================
-  # DEPLOY (main branch only)
+  # DEPLOY TO VPS (main branch only)
   # ============================================
   deploy:
     name: Deploy to VPS
@@ -134,7 +136,7 @@ jobs:
           script: |
             cd /opt/aenews-builder
             git pull origin main
-            docker-compose build
-            docker-compose up -d
+            docker compose build
+            docker compose up -d
             sleep 10
-            curl -f http://localhost:3001/api/health || exit 1
+            curl -sf http://localhost/api/health || exit 1
