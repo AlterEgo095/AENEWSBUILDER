@@ -25,6 +25,7 @@ import { healthRoutes } from './routes/health.routes.js';
 import { initRedis } from './services/redis.service.js';
 import { initWorker } from './workers/index.js';
 import { initSentry, captureException } from './observability/sentry.js';
+import { initTracing, shutdownTracing } from './observability/tracing.js';
 import { securityEngine } from './services/security-engine.js';
 import { contextMemory } from './services/context-memory.js';
 import { planVersioning } from './services/plan-versioning.js';
@@ -52,6 +53,12 @@ async function bootstrap() {
     // ============================================
 
     initSentry();
+
+    // ============================================
+    // 📡 OBSERVABILITY - OPENTELEMETRY TRACING
+    // ============================================
+
+    initTracing();
 
     // ============================================
     // 🔐 SECURITY LAYER
@@ -265,11 +272,13 @@ async function bootstrap() {
 
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, closing server gracefully...');
+  await shutdownTracing();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, closing server gracefully...');
+  await shutdownTracing();
   process.exit(0);
 });
 

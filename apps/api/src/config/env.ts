@@ -63,6 +63,10 @@ const envSchema = z.object({
   SENTRY_DSN: z.string().url().optional(),
   SENTRY_ENVIRONMENT: z.string().default('development'),
   
+  // OpenTelemetry Tracing
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().optional().default(''),
+  OTEL_SERVICE_NAME: z.string().optional().default('aenews-api'),
+  
   // Cost Management
   MAX_TOKENS_PER_REQUEST: z.string().transform(Number).default('8000'),
   COST_ALERT_THRESHOLD_DAILY: z.string().transform(Number).default('10'),
@@ -75,6 +79,7 @@ export const config = {
     port: env.API_PORT,
     host: env.API_HOST,
     nodeEnv: env.NODE_ENV,
+    serviceName: env.OTEL_SERVICE_NAME,
   },
   database: {
     url: env.DATABASE_URL,
@@ -131,6 +136,10 @@ export const config = {
   monitoring: {
     sentryDsn: env.SENTRY_DSN,
     sentryEnvironment: env.SENTRY_ENVIRONMENT,
+  },
+  tracing: {
+    otlpEndpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT,
+    enabled: env.OTEL_EXPORTER_OTLP_ENDPOINT.length > 0 || env.NODE_ENV === 'development',
   },
   cost: {
     maxTokensPerRequest: env.MAX_TOKENS_PER_REQUEST,

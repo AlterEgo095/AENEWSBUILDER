@@ -29,10 +29,34 @@ import { LRUCache } from 'lru-cache';
 import { z } from 'zod';
 import pino from 'pino';
 const logger = pino({ name: '@aenews/mcp:security' });
-import {
-  mcpToolsRegistered, mcpSecurityViolations, mcpRateLimitHits,
-  mcpAnomalies, mcpInvocations, mcpPermissionDenials
-} from '../../apps/api/src/observability/metrics.js';
+// ═══════════════════════════════════════════════════════════════════════════
+// 📊 LOCAL METRICS INTERFACE (decoupled from API package)
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface MetricsProvider {
+  inc: (labels?: Record<string, string>) => void;
+  set: (value?: number) => void;
+}
+
+const metrics: MetricsProvider = {
+  inc: (_labels?: Record<string, string>) => {},
+  set: (_value?: number) => {},
+};
+
+/**
+ * Allow the API package to inject a real metrics provider at startup.
+ * This decouples @aenews/mcp from the API observability layer.
+ */
+export function setMetricsProvider(provider: MetricsProvider): void {
+  Object.assign(metrics, provider);
+}
+
+export const mcpToolsRegistered = { set: (value?: number) => metrics.set(value) };
+export const mcpSecurityViolations = { inc: (labels?: Record<string, string>) => metrics.inc(labels) };
+export const mcpRateLimitHits = { inc: (labels?: Record<string, string>) => metrics.inc(labels) };
+export const mcpAnomalies = { inc: (labels?: Record<string, string>) => metrics.inc(labels) };
+export const mcpInvocations = { inc: (labels?: Record<string, string>) => metrics.inc(labels) };
+export const mcpPermissionDenials = { inc: (labels?: Record<string, string>) => metrics.inc(labels) };
 
 const docker = new Docker();
 
