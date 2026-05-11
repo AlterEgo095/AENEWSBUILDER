@@ -1,0 +1,172 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ========================================
+   AENEWS Admin — Premium Dark Theme
+   ======================================== */
+
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 3px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  html {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: #0A0B0E;
+    color: #e4e4e7;
+    min-height: 100vh;
+  }
+
+  ::selection {
+    background-color: rgba(59, 130, 246, 0.3);
+    color: white;
+  }
+}
+
+@layer components {
+  /* Glassmorphism Card */
+  .glass {
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .glass-sm {
+    background: rgba(255, 255, 255, 0.02);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+  }
+
+  .glass-hover {
+    transition: all 0.2s ease;
+  }
+
+  .glass-hover:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  /* Glow Border */
+  .glow-border {
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.1),
+                0 0 20px rgba(59, 130, 246, 0.05);
+  }
+
+  .glow-border-accent {
+    box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.1),
+                0 0 20px rgba(139, 92, 246, 0.05);
+  }
+
+  /* Premium Gradient Text */
+  .gradient-text {
+    background: linear-gradient(135deg, #3B82F6 0%, #8B5CF6 50%, #EC4899 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .gradient-text-brand {
+    background: linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Gradient Button Backgrounds */
+  .gradient-brand {
+    background: linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%);
+  }
+
+  .gradient-brand-hover {
+    background: linear-gradient(135deg, #2563EB 0%, #7C3AED 100%);
+  }
+
+  /* Input Styles */
+  .input-dark {
+    @apply bg-white/[0.03] border border-white/[0.08] rounded-lg px-4 py-2.5 text-sm text-white
+           placeholder:text-zinc-500 outline-none transition-all duration-200;
+  }
+
+  .input-dark:focus {
+    @apply border-brand/40 bg-white/[0.05] shadow-glow-brand;
+  }
+
+  .input-dark:hover:not(:focus) {
+    @apply border-white/[0.12];
+  }
+
+  /* Sidebar */
+  .sidebar-link {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
+           text-zinc-400 transition-all duration-200;
+  }
+
+  .sidebar-link:hover {
+    @apply text-zinc-200 bg-white/[0.04];
+  }
+
+  .sidebar-link-active {
+    @apply text-white gradient-brand;
+  }
+
+  .sidebar-link-active:hover {
+    @apply text-white;
+  }
+}
+
+@layer utilities {
+  /* Animation Delays */
+  .animation-delay-100 {
+    animation-delay: 100ms;
+  }
+  .animation-delay-200 {
+    animation-delay: 200ms;
+  }
+  .animation-delay-300 {
+    animation-delay: 300ms;
+  }
+  .animation-delay-500 {
+    animation-delay: 500ms;
+  }
+
+  /* Text Overflow */
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Hide Scrollbar */
+  .scrollbar-hide {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
