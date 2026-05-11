@@ -22,6 +22,7 @@ import { projectRoutes } from './routes/project.routes.js';
 import { engineRoutes } from './routes/engine.routes.js';
 import { streamRoutes } from './routes/stream.routes.js';
 import { healthRoutes } from './routes/health.routes.js';
+import { adminRoutes } from './routes/admin.routes.js';
 import { initRedis } from './services/redis.service.js';
 import { initWorker } from './workers/index.js';
 import { initSentry, captureException } from './observability/sentry.js';
@@ -204,6 +205,7 @@ async function bootstrap() {
     await app.register(projectRoutes, { prefix: '/api/projects' });
     await app.register(engineRoutes, { prefix: '/api/engine' });
     await app.register(streamRoutes, { prefix: '/api/stream' });
+    await app.register(adminRoutes, { prefix: '/api/admin' });
 
     // Prometheus Metrics
     app.get('/metrics', async (request, reply) => {
@@ -235,6 +237,9 @@ async function bootstrap() {
     app.log.info('Security Engine ready');
     app.log.info('Context Memory Engine ready');
     app.log.info('Plan Versioning Engine ready');
+    app.log.info('Sandbox Warm Pool active');
+    app.log.info('Event Store V2 (PostgreSQL + Redis Streams) active');
+    app.log.info('Admin API routes registered (/api/admin/*)');
 
     // ============================================
     // 🎯 START SERVER

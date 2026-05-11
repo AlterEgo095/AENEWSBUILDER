@@ -693,6 +693,17 @@ export class SandboxWarmPool extends EventEmitter {
   }
 
   /**
+   * 🔥 GET CIRCUIT BREAKER STATE
+   */
+  getCircuitBreakerState(): { state: string; failures: number; lastFailure: number } {
+    return {
+      state: this.circuitBreaker.state,
+      failures: this.circuitBreaker.failures,
+      lastFailure: this.circuitBreaker.lastFailure,
+    };
+  }
+
+  /**
    * Shutdown pool
    */
   async shutdown(): Promise<void> {

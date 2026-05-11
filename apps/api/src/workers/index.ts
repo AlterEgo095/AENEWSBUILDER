@@ -25,6 +25,7 @@ import { Generator } from './generator.js';
 import { SandboxManager } from './sandbox-manager.js';
 import { AutoHealing } from './auto-healing.js';
 import { EventStore } from './event-store.js';
+import { eventStoreV2 } from './event-store-v2.js';
 import { CostTracker } from './cost-tracker.js';
 import { MCPExecutor } from './mcp-executor.js';
 import { Deployer } from './deployer.js';
@@ -77,16 +78,18 @@ export interface ProjectContext {
 export class StateMachine {
   private currentState: WorkflowState;
   private eventStore: EventStore;
+  private projectId: string;
 
   constructor(initialState: WorkflowState = 'INIT', projectId: string) {
     this.currentState = initialState;
+    this.projectId = projectId;
     this.eventStore = new EventStore(projectId);
   }
 
   async transition(newState: WorkflowState, event: string, data?: any): Promise<void> {
     logger.info({ from: this.currentState, to: newState, event }, 'State transition');
     
-    // Record event
+    // Record event in V1 (Redis pub/sub for real-time SSE streaming)
     await this.eventStore.record({
       state: this.currentState,
       nextState: newState,
@@ -94,6 +97,22 @@ export class StateMachine {
       data,
       timestamp: new Date().toISOString(),
     });
+
+    // Persist event in V2 (PostgreSQL + Redis Streams for durability)
+    try {
+      await eventStoreV2.publish({
+        type: event,
+        projectId: this.projectId,
+        userId: '',
+        data: { state: this.currentState, nextState: newState, data },
+      });
+    } catch (v2Error: any) {
+      // V2 failure is non-fatal — V1 already delivered the real-time event
+      logger.warn(
+        { error: v2Error.message, projectId: this.projectId, event },
+        '⚠️ V2 persistence failed (V1 SSE still active)'
+      );
+    }
 
     this.currentState = newState;
   }
