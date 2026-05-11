@@ -121,4 +121,4 @@ psql:
 
 # Open Redis CLI
 redis-cli:
-        docker compose exec redis redis-cli -a $${REDIS_PASSWORD:-aenews_redis_secure_password}
+        docker compose exec -e REDISCLI_AUTH=$${REDIS_PASSWORD:-aenews_redis_secure_password} redis redis-cli

@@ -379,7 +379,7 @@ docker compose exec -T postgres pg_dump -U aenews aenews_builder | gzip > "$BACK
 
 # Backup Redis
 docker compose exec -T redis redis-cli --rdb - > "$BACKUP_DIR/redis_$DATE.rdb" 2>/dev/null || \
-docker compose exec -T redis redis-cli --no-auth-warning -a "${REDIS_PASSWORD:-aenews_redis_secure_password}" BGSAVE
+docker compose exec -T -e REDISCLI_AUTH="${REDIS_PASSWORD:-aenews_redis_secure_password}" redis redis-cli BGSAVE
 
 # Supprimer les backups de plus de 7 jours
 find $BACKUP_DIR -name "*.gz" -mtime +7 -delete
@@ -460,7 +460,7 @@ docker compose run --rm api npx prisma migrate deploy
 ### Erreur de connexion Redis
 
 ```bash
-docker compose exec redis redis-cli -a YOUR_PASSWORD ping
+docker compose exec -e REDISCLI_AUTH=YOUR_PASSWORD redis redis-cli ping
 ```
 
 ### Problèmes de performances

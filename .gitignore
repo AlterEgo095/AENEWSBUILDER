@@ -48,10 +48,9 @@ Thumbs.db
 docker-compose.override.yml
 
 # Secrets
+secrets/
 *.pem
 *.key
-secrets/*.pem
-secrets/*.key
 
 # Database
 *.sqlite

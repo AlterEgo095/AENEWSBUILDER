@@ -432,7 +432,7 @@ git clone https://github.com/AlterEgo095/AENEWSBUILDER.git
 cd AENEWSBUILDER
 
 # Installer les dependances (monorepo)
-pnpm install
+npm ci
 
 # Copier le fichier d'environnement
 cp .env.example .env
@@ -482,7 +482,7 @@ cd apps/api && npx prisma generate
 npx prisma migrate dev
 
 # Demarrer en mode dev (Turborepo)
-pnpm dev
+npm run dev
 ```
 
 **URLs locales :**
@@ -497,7 +497,7 @@ pnpm dev
 
 ```bash
 # Build tous les packages (Turborepo)
-pnpm build
+npm run build
 
 # Demarrer tous les services
 docker compose up -d
