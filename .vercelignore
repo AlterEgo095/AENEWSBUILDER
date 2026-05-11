@@ -1,0 +1,18 @@
+# Ignore everything except Studio
+*
+!apps/studio/
+!apps/studio/**
+
+# Always ignore these
+apps/api/
+apps/admin/
+packages/
+docker/
+docker-compose.yml
+Dockerfile
+secrets/
+scripts/
+docs/
+.github/
+*.md
+!apps/studio/README.md
