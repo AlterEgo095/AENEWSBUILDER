@@ -14,9 +14,9 @@ WORKDIR /app
 # Copy all workspace package.json files (monorepo requirement)
 COPY package.json package-lock.json* ./
 COPY apps/api/package.json ./apps/api/
-COPY packages/mcp/package.json ./packages/mcp/ 2>/dev/null || true
+COPY packages/mcp/package.json ./packages/mcp/
 
-# Install without workspaces (monorepo resolution causes issues in Docker)
+# Install with legacy peer deps
 RUN npm install --legacy-peer-deps --ignore-scripts 2>/dev/null
 
 COPY . .
