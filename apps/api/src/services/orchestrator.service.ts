@@ -11,6 +11,16 @@ import { logger } from '../config/logger.js';
 
 const openai = new OpenAI({ apiKey: config.openai.apiKey });
 const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
+
+// DashScope client (OpenAI-compatible with custom baseURL)
+let dashscope: OpenAI | null = null;
+if (config.dashscope.enabled && config.dashscope.apiKey) {
+  dashscope = new OpenAI({
+    apiKey: config.dashscope.apiKey,
+    baseURL: config.dashscope.baseUrl,
+  });
+  logger.info(`[Orchestrator] DashScope enabled: ${config.dashscope.baseUrl}`);
+}
 let _cache: CacheService | null = null;
 function getCache(): CacheService {
   if (!_cache) {
@@ -57,7 +67,7 @@ export interface Step {
 }
 
 export interface DecisionResult {
-  model: 'gpt-4o' | 'gpt-4o-mini' | 'claude-sonnet' | 'claude-opus';
+  model: 'gpt-4o' | 'gpt-4o-mini' | 'claude-sonnet' | 'claude-opus' | 'qwen-turbo' | 'qwen-plus' | 'qwen-max' | 'qwq-32b' | 'qwen-long';
   mcpTools: string[];
   estimatedCost: number;
   reasoning: string;
@@ -69,7 +79,8 @@ export interface DecisionResult {
 
 export class GhostClassifier {
   /**
-   * Classify project using GPT-4o-mini (cached)
+   * Classify project using the cheapest available model (cached).
+   * Priority: DashScope qwen-turbo → OpenAI gpt-4o-mini → Anthropic claude-3-haiku
    */
   async classify(prompt: string): Promise<ProjectClassification> {
     const cacheKey = getCache().generateKey('classification', prompt);
@@ -81,39 +92,61 @@ export class GhostClassifier {
       return cached;
     }
 
-    try {
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: `You are a project classification expert. Analyze the project description and return a JSON object with:
+    const systemPrompt = `You are a project classification expert. Analyze the project description and return a JSON object with:
 - complexity: "simple" | "medium" | "complex"
 - type: "landing" | "webapp" | "ecommerce" | "dashboard" | "api" | "other"
 - features: string[] (key features detected)
 - estimatedFiles: number (estimated number of files)
 - recommendedStack: string[] (recommended technologies)
 
-Return ONLY valid JSON, no explanations.`,
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        temperature: 0.3,
-        max_tokens: 500,
-        response_format: { type: 'json_object' },
-      });
+Return ONLY valid JSON, no explanations.`;
 
-      const classification = JSON.parse(
-        response.choices[0].message.content || '{}'
-      ) as ProjectClassification;
+    try {
+      let content: string;
+      let usedModel = 'unknown';
+
+      // Try DashScope first (cheapest and fastest)
+      if (dashscope) {
+        try {
+          const response = await dashscope.chat.completions.create({
+            model: 'qwen-turbo',
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: prompt },
+            ],
+            temperature: 0.3,
+            max_tokens: 500,
+            response_format: { type: 'json_object' },
+          });
+          content = response.choices[0]?.message?.content || '';
+          usedModel = 'qwen-turbo';
+        } catch (dsError) {
+          logger.warn({ error: dsError }, '⚠️ DashScope classification failed, falling back to OpenAI');
+        }
+      }
+
+      // Fallback to OpenAI
+      if (!content) {
+        const response = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt },
+          ],
+          temperature: 0.3,
+          max_tokens: 500,
+          response_format: { type: 'json_object' },
+        });
+        content = response.choices[0]?.message?.content || '';
+        usedModel = 'gpt-4o-mini';
+      }
+
+      const classification = JSON.parse(content || '{}') as ProjectClassification;
 
       // Cache for 24h
       await getCache().set(cacheKey, classification, config.cache.ttl.classification);
 
-      logger.info({ classification }, '✅ Project classified');
+      logger.info({ classification, model: usedModel }, '✅ Project classified');
       return classification;
 
     } catch (error) {
@@ -129,7 +162,8 @@ Return ONLY valid JSON, no explanations.`,
 
 export class Planner {
   /**
-   * Generate detailed project plan using Claude Sonnet (cached)
+   * Generate detailed project plan (cached).
+   * Priority: DashScope qwen-plus → Anthropic Claude Sonnet → OpenAI gpt-4o
    */
   async generatePlan(
     prompt: string,
@@ -144,12 +178,7 @@ export class Planner {
       return cached;
     }
 
-    try {
-      const response = await anthropic.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 4000,
-        temperature: 0.2,
-        system: `You are an expert software architect. Generate a detailed project plan based on the classification.
+    const systemPrompt = `You are an expert software architect. Generate a detailed project plan based on the classification.
 Return a JSON object with:
 - files: Array of {path, type, description, dependencies, priority}
 - dependencies: Object with package names and versions
@@ -158,26 +187,59 @@ Return a JSON object with:
 - estimatedCost: Estimated cost in USD
 - estimatedTime: Estimated time in minutes
 
-Return ONLY valid JSON.`,
-        messages: [
-          {
-            role: 'user',
-            content: `Project: ${prompt}\n\nClassification: ${JSON.stringify(classification)}`,
-          },
-        ],
-      });
+Return ONLY valid JSON.`;
 
-      const content = response.content[0];
-      if (content.type !== 'text') {
-        throw new Error('Unexpected response type');
+    const userMessage = `Project: ${prompt}\n\nClassification: ${JSON.stringify(classification)}`;
+
+    try {
+      let content: string;
+      let usedModel = 'unknown';
+
+      // Try DashScope qwen-plus first (good quality, lower cost)
+      if (dashscope) {
+        try {
+          const response = await dashscope.chat.completions.create({
+            model: 'qwen-plus',
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userMessage },
+            ],
+            temperature: 0.2,
+            max_tokens: 4000,
+          });
+          content = response.choices[0]?.message?.content || '';
+          usedModel = 'qwen-plus';
+        } catch (dsError) {
+          logger.warn({ error: dsError }, '⚠️ DashScope planning failed, falling back to Anthropic');
+        }
       }
 
-      const plan = JSON.parse(content.text) as ProjectPlan;
+      // Fallback to Anthropic Claude Sonnet
+      if (!content) {
+        const response = await anthropic.messages.create({
+          model: 'claude-3-5-sonnet-20241022',
+          max_tokens: 4000,
+          temperature: 0.2,
+          system: systemPrompt,
+          messages: [
+            { role: 'user', content: userMessage },
+          ],
+        });
+
+        const respContent = response.content[0];
+        if (respContent.type !== 'text') {
+          throw new Error('Unexpected Claude response type');
+        }
+        content = respContent.text;
+        usedModel = 'claude-3-5-sonnet';
+      }
+
+      const plan = JSON.parse(content) as ProjectPlan;
 
       // Cache for 1h
       await getCache().set(cacheKey, plan, config.cache.ttl.plan);
 
-      logger.info({ plan }, '✅ Plan generated');
+      logger.info({ plan, model: usedModel }, '✅ Plan generated');
       return plan;
 
     } catch (error) {
@@ -196,27 +258,32 @@ export class DecisionEngine {
    * Decide which model to use for generation
    */
   decide(classification: ProjectClassification, fileSpec: FileSpec): DecisionResult {
-    let model: DecisionResult['model'] = 'gpt-4o-mini';
-    let estimatedCost = 0.001;
+    let model: DecisionResult['model'] = 'qwen-turbo';
+    let estimatedCost = 0.0003;
     let reasoning = '';
 
     // Decision logic based on complexity and file type
+    // DashScope models are preferred (cheaper, same quality)
     if (classification.complexity === 'complex' && fileSpec.type === 'api') {
-      model = 'claude-opus';
-      estimatedCost = 0.015;
-      reasoning = 'Complex API requires Claude Opus';
-    } else if (classification.complexity === 'medium') {
-      model = 'claude-sonnet';
-      estimatedCost = 0.005;
-      reasoning = 'Medium complexity uses Claude Sonnet';
-    } else if (fileSpec.type === 'config' || fileSpec.type === 'style') {
-      model = 'gpt-4o-mini';
-      estimatedCost = 0.0005;
-      reasoning = 'Simple config/style uses GPT-4o-mini';
-    } else {
-      model = 'gpt-4o';
+      model = 'qwen-max';
+      estimatedCost = 0.004;
+      reasoning = 'Complex API uses Qwen-Max (DashScope advanced)';
+    } else if (classification.complexity === 'complex') {
+      model = 'qwq-32b';
       estimatedCost = 0.002;
-      reasoning = 'Standard generation uses GPT-4o';
+      reasoning = 'Complex logic uses QwQ-32B reasoning model (DashScope)';
+    } else if (classification.complexity === 'medium') {
+      model = 'qwen-plus';
+      estimatedCost = 0.001;
+      reasoning = 'Medium complexity uses Qwen-Plus (DashScope standard)';
+    } else if (fileSpec.type === 'config' || fileSpec.type === 'style') {
+      model = 'qwen-turbo';
+      estimatedCost = 0.0003;
+      reasoning = 'Simple config/style uses Qwen-Turbo (DashScope fast)';
+    } else {
+      model = 'qwen3-235b-a22b';
+      estimatedCost = 0.001;
+      reasoning = 'Standard generation uses Qwen3-235B (DashScope)';
     }
 
     // Select MCP tools based on features
