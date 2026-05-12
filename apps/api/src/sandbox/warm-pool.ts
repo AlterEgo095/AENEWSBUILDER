@@ -36,11 +36,18 @@ import {
 } from '../observability/metrics.js';
 
 const execAsync = promisify(exec);
+import { existsSync } from 'fs';
+
+const DOCKER_AVAILABLE = existsSync('/var/run/docker.sock');
 let docker: Docker | null = null;
-try {
-  docker = new Docker();
-} catch (e) {
-  logger.warn('[WarmPool] Docker not available - sandbox features disabled');
+if (DOCKER_AVAILABLE) {
+  try {
+    docker = new Docker();
+  } catch (e) {
+    // ignore
+  }
+} else {
+  logger.warn('[WarmPool] Docker socket not found - sandbox features disabled');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
