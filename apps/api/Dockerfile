@@ -48,10 +48,13 @@ RUN adduser --system --uid 1001 aenews
 COPY --from=builder --chown=aenews:nodejs /app/apps/api/dist ./dist
 COPY --from=builder --chown=aenews:nodejs /app/apps/api/prisma ./prisma
 
-# Install production dependencies
+# Copy Prisma generated client and production node_modules
+COPY --from=builder --chown=aenews:nodejs /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder --chown=aenews:nodejs /app/node_modules/.prisma ./node_modules/.prisma
+
+# Install production dependencies (includes prisma engine)
 COPY --from=builder /app/apps/api/package.json ./package.json
 COPY --from=deps /app/package.json ./package-lock.json
-COPY --from=deps /app/apps/api/package.json ./apps-api-package.json
 RUN npm install --omit=dev --ignore-scripts 2>/dev/null
 
 # Create secrets directory with placeholder
