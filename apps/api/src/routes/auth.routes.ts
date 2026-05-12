@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
+import { getRedis } from '../services/redis.service.js';
 
 const prisma = new PrismaClient();
 
@@ -25,6 +26,21 @@ export async function authRoutes(app: FastifyInstance) {
   app.post('/register', async (request, reply) => {
     try {
       const body = registerSchema.parse(request.body);
+
+      // Check if registration is enabled via Redis
+      try {
+        const redis = getRedis();
+        const registrationEnabled = await redis.get('settings:registrationEnabled');
+        if (registrationEnabled === 'false') {
+          return reply.status(403).send({
+            success: false,
+            error: 'Registration is disabled',
+            message: 'Registration is currently disabled. Please contact an administrator.',
+          });
+        }
+      } catch {
+        // Redis not available — allow registration to proceed (fail-open)
+      }
 
       // Check if user already exists
       const existingUser = await prisma.user.findUnique({
@@ -65,6 +81,7 @@ export async function authRoutes(app: FastifyInstance) {
           id: user.id,
           email: user.email,
           name: user.name,
+          role: user.role,
           createdAt: user.createdAt,
         },
       });
@@ -126,6 +143,7 @@ export async function authRoutes(app: FastifyInstance) {
           id: user.id,
           email: user.email,
           name: user.name,
+          role: user.role,
           createdAt: user.createdAt,
         },
       });
@@ -154,7 +172,7 @@ export async function authRoutes(app: FastifyInstance) {
     // Fetch fresh user data from DB
     const dbUser = await prisma.user.findUnique({
       where: { id: user.id },
-      select: { id: true, email: true, name: true, createdAt: true },
+      select: { id: true, email: true, name: true, role: true, createdAt: true },
     });
 
     if (!dbUser) {
@@ -167,6 +185,31 @@ export async function authRoutes(app: FastifyInstance) {
     return reply.send({
       valid: true,
       user: dbUser,
+    });
+  });
+
+  // Get current user (me) — returns ApiResponse<User> shape
+  app.get('/me', {
+    onRequest: [(app as any).authenticate],
+  }, async (request, reply) => {
+    const user = request.user as any;
+
+    // Fetch fresh user data from DB
+    const dbUser = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { id: true, email: true, name: true, role: true, createdAt: true },
+    });
+
+    if (!dbUser) {
+      return reply.status(401).send({
+        success: false,
+        error: 'User not found',
+      });
+    }
+
+    return reply.send({
+      success: true,
+      data: dbUser,
     });
   });
 }

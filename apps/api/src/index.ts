@@ -16,6 +16,7 @@ import websocket from '@fastify/websocket';
 import { config } from './config/env.js';
 import { logger } from './config/logger.js';
 import { errorHandler } from './middleware/error-handler.js';
+import { registerAuthorizeAdmin } from './middleware/authorize-admin.js';
 import { metricsRegistry } from './observability/metrics.js';
 import { authRoutes } from './routes/auth.routes.js';
 import { projectRoutes } from './routes/project.routes.js';
@@ -146,7 +147,7 @@ async function bootstrap() {
       },
     });
 
-    // JWT Decorator with Claims Validation + 🔥 TOKEN REVOCATION CHECK
+    // JWT Decorator with Claims Validation + 🔥 TOKEN REVOCATION CHECK + 🔥 BAN CHECK
     app.decorate('authenticate', async (request: any, reply: any) => {
       try {
         const decoded = await request.jwtVerify();
@@ -173,11 +174,27 @@ async function bootstrap() {
         if (revoked) {
           throw new Error('Token revoked');
         }
+
+        // 🔥 CHECK BAN STATUS (Redis)
+        const banned = await redis.get(`user:banned:${decoded.sub}`);
+        if (banned) {
+          logger.warn('Banned user attempted access', {
+            userId: decoded.sub,
+            ip: request.ip,
+            path: request.url,
+          });
+          reply.code(403).send({
+            error: 'Forbidden',
+            message: 'Account is banned',
+          });
+          return;
+        }
         
         // Attach user info to request
         request.user = { id: decoded.sub, email: decoded.email };
         
       } catch (err: any) {
+        if (reply.statusCode === 403) return; // already sent (ban check)
         logger.warn('Authentication failed', { 
           error: err.message, 
           ip: request.ip,
@@ -189,6 +206,9 @@ async function bootstrap() {
         });
       }
     });
+
+    // 🔐 ADMIN AUTHORIZATION DECORATOR
+    registerAuthorizeAdmin(app);
 
     // ============================================
     // 🔌 WEBSOCKET SUPPORT (SSE)
@@ -240,6 +260,7 @@ async function bootstrap() {
     app.log.info('Sandbox Warm Pool active');
     app.log.info('Event Store V2 (PostgreSQL + Redis Streams) active');
     app.log.info('Admin API routes registered (/api/admin/*)');
+    app.log.info('Admin authorization middleware active');
 
     // ============================================
     // 🎯 START SERVER

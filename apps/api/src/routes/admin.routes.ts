@@ -77,6 +77,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/metrics', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const thirtyDaysAgo = new Date();
@@ -185,6 +186,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/users', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const query = request.query as any;
@@ -281,6 +283,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/users/:id', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
@@ -341,6 +344,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.put('/users/:id', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
@@ -396,6 +400,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.delete('/users/:id', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
@@ -435,6 +440,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/projects', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const query = request.query as any;
@@ -516,6 +522,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/projects/:id', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
@@ -577,6 +584,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.delete('/projects/:id', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
@@ -617,6 +625,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/jobs', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const query = request.query as any;
@@ -698,6 +707,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.post('/jobs/:id/retry', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
@@ -725,6 +735,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.delete('/jobs/:id', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
@@ -765,6 +776,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/events', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const query = request.query as any;
@@ -800,6 +812,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/costs', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const query = request.query as any;
@@ -907,6 +920,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/mcp/tools', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const redis = getRedis();
@@ -954,6 +968,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.put('/mcp/tools/:id', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
@@ -1003,6 +1018,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/queue/stats', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const queue = getProjectQueue();
@@ -1038,6 +1054,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.post('/queue/clear-failed', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const queue = getProjectQueue();
@@ -1078,6 +1095,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/sandbox/metrics', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const metrics = warmPool.getMetrics();
@@ -1099,6 +1117,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/sandbox/health', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const metrics = warmPool.getMetrics();
@@ -1141,6 +1160,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/settings', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const redis = getRedis();
@@ -1170,6 +1190,7 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.put('/settings', {
     onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
   }, async (request, reply) => {
     try {
       const body = request.body as Record<string, string>;

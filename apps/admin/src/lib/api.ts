@@ -89,7 +89,13 @@ class ApiClient {
   }
 
   async getMe() {
-    return this.get<ApiResponse<User>>('/auth/me');
+    // /auth/verify returns { valid: true, user: { id, email, name, role, createdAt } }
+    const res = await this.get<{ valid: boolean; user: User }>('/auth/verify');
+    // Map to ApiResponse<User> shape expected by the admin app
+    return {
+      success: res.valid,
+      data: res.user,
+    } as ApiResponse<User>;
   }
 
   // ─── Users ───────────────────────────────────
