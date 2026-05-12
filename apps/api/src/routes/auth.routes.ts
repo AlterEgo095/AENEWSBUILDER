@@ -5,10 +5,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../config/prisma.js';
 import { getRedis } from '../services/redis.service.js';
-
-const prisma = new PrismaClient();
 
 const registerSchema = z.object({
   email: z.string().email(),

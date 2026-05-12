@@ -371,20 +371,27 @@ export async function adminRoutes(app: FastifyInstance) {
         }
       }
 
-      // Role storage in Redis (schema does not have a role column)
+      // Role update — store in the DB 'role' column AND sync to Redis cache
       if (body.role && ['admin', 'user', 'moderator'].includes(body.role)) {
-        const redis = getRedis();
-        await redis.hset(`user:${id}:meta`, 'role', body.role);
+        updateData.role = body.role;
+
+        // Sync Redis cache key used by authorizeAdmin middleware
+        try {
+          const redis = getRedis();
+          await redis.set(`user:${id}:role`, body.role, 'EX', 3600);
+        } catch {
+          // Redis cache update is best-effort
+        }
       }
 
       if (Object.keys(updateData).length > 0) {
         await prisma.user.update({ where: { id }, data: updateData });
       }
 
-      // Fetch updated user
+      // Fetch updated user (include role field)
       const updated = await prisma.user.findUnique({
         where: { id },
-        select: { id: true, email: true, name: true, createdAt: true, updatedAt: true },
+        select: { id: true, email: true, name: true, role: true, createdAt: true, updatedAt: true },
       });
 
       return reply.send({ success: true, user: updated });
