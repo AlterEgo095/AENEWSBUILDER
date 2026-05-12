@@ -11,20 +11,36 @@ interface Message {
   content: string;
   timestamp: Date;
   loading?: boolean;
+  error?: boolean;
 }
+
+const WELCOME_MESSAGE = `Bonjour ${'USER_NAME'}. Je suis votre assistant IA de developpement AENEWS.
+
+Je peux vous aider avec :
+
+- **Developpement Web** - React, Next.js, TypeScript, TailwindCSS, APIs
+- **Debug** - Identification et correction de problemes de code
+- **Architecture** - Conception de systemes et bonnes pratiques
+- **DevOps** - Docker, deploiement, CI/CD, monitoring
+- **Bases de donnees** - PostgreSQL, Prisma, Redis, schemas
+
+Pour creer un projet complet avec generation IA, utilisez l'onglet "Nouveau projet".
+
+Comment puis-je vous aider ?`;
 
 export function AIChat({ token, user }: AIChatProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
       role: 'assistant',
-      content: `Hello ${user.name || 'there'}! \u{1F44B}\n\nI'm your AENEWS AI Assistant. I can help you with:\n\n\u2022 **Web Development** \u2014 React, Next.js, Tailwind CSS, APIs\n\u2022 **Debugging** \u2014 Find and fix code issues\n\u2022 **Architecture** \u2014 Design patterns and best practices\n\u2022 **DevOps** \u2014 Docker, deployment, CI/CD\n\nHow can I help you today?`,
+      content: WELCOME_MESSAGE.replace('USER_NAME', user.name || 'developpeur'),
       timestamp: new Date(),
     },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const scrollToBottom = useCallback(() => {
@@ -35,43 +51,67 @@ export function AIChat({ token, user }: AIChatProps) {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
+  // Auto-resize textarea
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+      inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 120) + 'px';
+    }
+  }, [input]);
+
   const sendMessage = async () => {
-    if (!input.trim() || loading) return;
+    const trimmed = input.trim();
+    if (!trimmed || loading) return;
 
     const userMessage: Message = {
       id: `msg_${Date.now()}`,
       role: 'user',
-      content: input.trim(),
+      content: trimmed,
       timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    const loadingId = `loading_${Date.now()}`;
+
+    setMessages(prev => [...prev, userMessage, {
+      id: loadingId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+      loading: true,
+    }]);
     setInput('');
     setLoading(true);
 
-    // Add loading message
-    const loadingId = `loading_${Date.now()}`;
-    setMessages(prev => [...prev, { id: loadingId, role: 'assistant', content: '', timestamp: new Date(), loading: true }]);
-
     try {
-      const response = await fetch('/api/projects', {
+      // Build conversation history (exclude welcome and loading messages)
+      const history = messages
+        .filter(m => m.id !== 'welcome' && !m.loading && !m.error)
+        .map(m => ({ role: m.role, content: m.content }));
+
+      const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
-          prompt: `AI Chat Request: ${input.trim()}\n\nContext: User is asking a general question. Please provide a helpful response.`,
-          name: `chat_${Date.now()}`,
+          message: trimmed,
+          history,
         }),
       });
 
-      // Even if project creation works, we show a smart response
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Erreur de communication avec l\'IA');
+      }
+
       setMessages(prev => prev.map(m =>
         m.id === loadingId ? {
           ...m,
           loading: false,
-          content: generateSmartResponse(input.trim(), response.ok),
+          content: data.content,
+          timestamp: new Date(),
         } : m
       ));
     } catch (err: any) {
@@ -79,11 +119,14 @@ export function AIChat({ token, user }: AIChatProps) {
         m.id === loadingId ? {
           ...m,
           loading: false,
-          content: `Sorry, I encountered an error: ${err.message}. Please try again.`,
+          error: true,
+          content: `Erreur : ${err.message || 'Service IA indisponible. Veuillez reessayer.'}`,
+          timestamp: new Date(),
         } : m
       ));
     } finally {
       setLoading(false);
+      inputRef.current?.focus();
     }
   };
 
@@ -95,24 +138,40 @@ export function AIChat({ token, user }: AIChatProps) {
   };
 
   const clearChat = () => {
-    setMessages([messages[0]]);
+    setMessages([{
+      id: 'welcome',
+      role: 'assistant',
+      content: WELCOME_MESSAGE.replace('USER_NAME', user.name || 'developpeur'),
+      timestamp: new Date(),
+    }]);
   };
 
   return (
     <div className="ai-chat">
       <div className="chat-header">
         <div>
-          <h2>&#x1F916; AI Assistant</h2>
-          <p className="chat-subtitle">Powered by AENEWS AI Engine</p>
+          <h2>Assistant IA</h2>
+          <p className="chat-subtitle">Moteur IA AENEWS &mdash; Multi-modele avec failover</p>
         </div>
-        <button className="clear-btn" onClick={clearChat}>&#x1F5D1;&#xFE0F; Clear</button>
+        <div className="chat-header-actions">
+          <button className="clear-btn" onClick={clearChat}>
+            <span className="clear-icon">&#x21BB;</span> Nouvelle conversation
+          </button>
+        </div>
       </div>
 
-      <div className="chat-messages">
+      <div className="chat-messages" ref={chatContainerRef}>
         {messages.map((msg) => (
-          <div key={msg.id} className={`message ${msg.role}`}>
+          <div key={msg.id} className={`message ${msg.role} ${msg.error ? 'error' : ''}`}>
             {msg.role === 'assistant' && (
-              <div className="avatar assistant-avatar">&#x1F916;</div>
+              <div className="avatar assistant-avatar">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/>
+                  <path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/>
+                  <circle cx="9" cy="10" r="0.5" fill="currentColor"/>
+                  <circle cx="15" cy="10" r="0.5" fill="currentColor"/>
+                </svg>
+              </div>
             )}
             <div className="message-content">
               {msg.loading ? (
@@ -121,12 +180,7 @@ export function AIChat({ token, user }: AIChatProps) {
                 </div>
               ) : (
                 <div className="message-text">
-                  {msg.content.split('\n').map((line, i) => {
-                    if (line.startsWith('\u2022 ')) {
-                      return <div key={i} className="bullet-point">\u2022 {renderMarkdown(line.slice(2))}</div>;
-                    }
-                    return <p key={i}>{renderMarkdown(line) || '\u00A0'}</p>;
-                  })}
+                  <MarkdownRenderer content={msg.content} />
                 </div>
               )}
               <span className="message-time">
@@ -148,7 +202,7 @@ export function AIChat({ token, user }: AIChatProps) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask me anything about web development..."
+            placeholder="Decrivez votre besoin technique..."
             rows={1}
             disabled={loading}
           />
@@ -156,64 +210,184 @@ export function AIChat({ token, user }: AIChatProps) {
             className="send-btn"
             onClick={sendMessage}
             disabled={!input.trim() || loading}
+            title="Envoyer (Entree)"
           >
-            {loading ? '\u23F3' : '\u{1F4E4}'}
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
           </button>
         </div>
-        <p className="input-hint">Press Enter to send, Shift+Enter for new line</p>
+        <p className="input-hint">
+          Entree pour envoyer &middot; Shift+Entree pour un saut de ligne
+        </p>
       </div>
     </div>
   );
 }
 
-function renderMarkdown(text: string): React.ReactNode {
-  // Bold
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={i}>{part.slice(2, -2)}</strong>;
-    }
-    // Inline code
-    const codeParts = part.split(/(`[^`]+`)/g);
-    return codeParts.map((cp, j) => {
-      if (cp.startsWith('`') && cp.endsWith('`')) {
-        return <code key={`${i}-${j}`} className="inline-code">{cp.slice(1, -1)}</code>;
+/* ──────────────────────────────────────────────
+   Markdown Renderer — supports code blocks, bold, italic, inline code, lists
+   ────────────────────────────────────────────── */
+function MarkdownRenderer({ content }: { content: string }) {
+  if (!content) return null;
+
+  const elements: React.ReactNode[] = [];
+  const lines = content.split('\n');
+  let i = 0;
+  let key = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Code block (```lang ... ```)
+    if (line.trim().startsWith('```')) {
+      const lang = line.trim().slice(3).trim() || 'text';
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        codeLines.push(lines[i]);
+        i++;
       }
-      return cp;
+      i++; // skip closing ```
+      elements.push(
+        <div key={key++} className="code-block">
+          <div className="code-header">
+            <span className="code-lang">{lang}</span>
+            <CopyButton text={codeLines.join('\n')} />
+          </div>
+          <pre className="code-body">
+            <code>{codeLines.join('\n')}</code>
+          </pre>
+        </div>
+      );
+      continue;
+    }
+
+    // Empty line
+    if (line.trim() === '') {
+      elements.push(<div key={key++} style={{ height: '0.5rem' }} />);
+      i++;
+      continue;
+    }
+
+    // Heading
+    if (line.startsWith('### ')) {
+      elements.push(<h4 key={key++} className="md-h4">{renderInline(line.slice(4))}</h4>);
+      i++;
+      continue;
+    }
+    if (line.startsWith('## ')) {
+      elements.push(<h3 key={key++} className="md-h3">{renderInline(line.slice(3))}</h3>);
+      i++;
+      continue;
+    }
+    if (line.startsWith('# ')) {
+      elements.push(<h2 key={key++} className="md-h2">{renderInline(line.slice(2))}</h2>);
+      i++;
+      continue;
+    }
+
+    // Bullet list
+    if (line.trim().startsWith('- ') || line.trim().startsWith('* ') || line.trim().match(/^\d+\.\s/)) {
+      const listItems: string[] = [];
+      while (i < lines.length && (lines[i].trim().startsWith('- ') || lines[i].trim().startsWith('* ') || lines[i].trim().match(/^\d+\.\s/))) {
+        listItems.push(lines[i].trim().replace(/^[-*]\s|^\d+\.\s/, ''));
+        i++;
+      }
+      elements.push(
+        <ul key={key++} className="md-list">
+          {listItems.map((item, idx) => (
+            <li key={idx}>{renderInline(item)}</li>
+          ))}
+        </ul>
+      );
+      continue;
+    }
+
+    // Numbered list
+    if (line.trim().match(/^\d+\.\s/)) {
+      const numItems: string[] = [];
+      while (i < lines.length && lines[i].trim().match(/^\d+\.\s/)) {
+        numItems.push(lines[i].trim().replace(/^\d+\.\s/, ''));
+        i++;
+      }
+      elements.push(
+        <ol key={key++} className="md-list">
+          {numItems.map((item, idx) => (
+            <li key={idx}>{renderInline(item)}</li>
+          ))}
+        </ol>
+      );
+      continue;
+    }
+
+    // Regular paragraph
+    elements.push(<p key={key++} className="md-p">{renderInline(line)}</p>);
+    i++;
+  }
+
+  return <>{elements}</>;
+}
+
+/* Inline markdown: bold, italic, inline code, links */
+function renderInline(text: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  // Bold + italic + code pattern
+  const regex = /(\*\*\*.*?\*\*\*|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\[([^\]]+)\]\(([^)]+)\))/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+
+    if (token.startsWith('```') || token.startsWith('***')) {
+      parts.push(<strong key={parts.length}><em>{token.slice(3, -3)}</em></strong>);
+    } else if (token.startsWith('**')) {
+      parts.push(<strong key={parts.length}>{token.slice(2, -2)}</strong>);
+    } else if (token.startsWith('*')) {
+      parts.push(<em key={parts.length}>{token.slice(1, -1)}</em>);
+    } else if (token.startsWith('`')) {
+      parts.push(<code key={parts.length} className="inline-code">{token.slice(1, -1)}</code>);
+    } else if (token.startsWith('[')) {
+      const linkMatch = token.match(/\[([^\]]+)\]\(([^)]+)\)/);
+      if (linkMatch) {
+        parts.push(
+          <a key={parts.length} href={linkMatch[2]} target="_blank" rel="noopener noreferrer" className="md-link">
+            {linkMatch[1]}
+          </a>
+        );
+      }
+    }
+
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : text;
+}
+
+/* Copy to clipboard button */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = React.useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     });
-  });
+  };
+
+  return (
+    <button className="copy-btn" onClick={handleCopy} title="Copier">
+      {copied ? 'Copie !' : 'Copier'}
+    </button>
+  );
 }
 
-function generateSmartResponse(query: string, apiWorking: boolean): string {
-  const q = query.toLowerCase();
-
-  if (q.includes('react') || q.includes('component')) {
-    return `Great question about React! Here are some key points:\n\n\u2022 **Components** are the building blocks of React apps\n\u2022 Use **functional components** with hooks for modern React development\n\u2022 **Props** pass data down, **state** manages local data\n\u2022 Consider using **React.memo** for performance optimization\n\n${apiWorking ? '\u2705 AI Engine is connected and ready. I can help you build React components!' : '\u{1F4A1} Tip: You can also create a full React project using the "New Project" tab.'}`;
-  }
-
-  if (q.includes('next.js') || q.includes('nextjs') || q.includes('next js')) {
-    return `Next.js is a powerful React framework! Here's what you need to know:\n\n\u2022 **App Router** (app/) is the modern approach \u2014 use it for new projects\n\u2022 **Server Components** reduce client-side JavaScript\n\u2022 **API Routes** let you build backend endpoints\n\u2022 **SSR/SSG/ISR** for optimal performance strategies\n\n\u{1F4A1} I recommend using Next.js 14+ with TypeScript and Tailwind CSS.`;
-  }
-
-  if (q.includes('css') || q.includes('tailwind') || q.includes('style')) {
-    return `For styling modern web apps, here are my recommendations:\n\n\u2022 **Tailwind CSS** \u2014 Utility-first, great with React/Next.js\n\u2022 **CSS Modules** \u2014 Scoped styles, built into Next.js\n\u2022 **Styled Components** \u2014 CSS-in-JS, good for dynamic styles\n\u2022 **CSS Grid + Flexbox** \u2014 Modern layout techniques\n\n\u{1F4A1} The AENEWS Studio uses Tailwind CSS for the admin interface.`;
-  }
-
-  if (q.includes('api') || q.includes('backend') || q.includes('server')) {
-    return `Building APIs effectively requires careful planning:\n\n\u2022 **REST** \u2014 Simple, widely supported, good for most apps\n\u2022 **GraphQL** \u2014 Flexible queries, reduces over-fetching\n\u2022 **WebSocket** \u2014 Real-time communication (used by AENEWS for SSE)\n\u2022 **Authentication** \u2014 JWT tokens, bcrypt for passwords\n\n\u{1F4A1} The AENEWS API uses Fastify + Prisma + PostgreSQL + BullMQ.`;
-  }
-
-  if (q.includes('database') || q.includes('postgres') || q.includes('sql') || q.includes('prisma')) {
-    return `Database design is crucial for scalable applications:\n\n\u2022 **PostgreSQL** \u2014 Robust relational database, great for complex queries\n\u2022 **Prisma** \u2014 Type-safe ORM, auto-generates migrations\n\u2022 **Redis** \u2014 In-memory cache for sessions, queues, real-time data\n\u2022 **Indexing** \u2014 Critical for query performance\n\n\u{1F4A1} AENEWS uses PostgreSQL via Prisma with Redis for caching and job queues.`;
-  }
-
-  if (q.includes('docker') || q.includes('deploy') || q.includes('devops') || q.includes('container')) {
-    return `Modern deployment best practices:\n\n\u2022 **Docker** \u2014 Containerize your apps for consistent deployments\n\u2022 **Docker Compose** \u2014 Multi-container orchestration for development\n\u2022 **nginx** \u2014 Reverse proxy, SSL termination, static file serving\n\u2022 **CI/CD** \u2014 Automated testing and deployment pipelines\n\n\u{1F4A1} AENEWS deploys via Docker Compose with nginx reverse proxy.`;
-  }
-
-  if (q.includes('hello') || q.includes('hi') || q.includes('bonjour') || q.includes('salut')) {
-    return `Hello! \u{1F44B} Welcome to AENEWS AI Assistant!\n\nI'm here to help you with web development, coding questions, architecture decisions, and more.\n\nFeel free to ask me anything! I can help with:\n\u2022 Frontend (React, Next.js, CSS)\n\u2022 Backend (APIs, databases)\n\u2022 DevOps (Docker, deployment)\n\u2022 General programming questions`;
-  }
-
-  return `Thanks for your question! Here's my analysis:\n\n\u2022 Your query about "${query.substring(0, 50)}" is noted\n\u2022 I can help you explore this topic in detail\n\u2022 Try being more specific for better results\n\n\u{1F4A1} You can also create a full project using the "New Project" tab \u2014 just describe what you want to build!\n\n${apiWorking ? '\u2705 AI Engine: Connected' : '\u26A0\uFE0F AI Engine: Verifying connection...'}`;
-}

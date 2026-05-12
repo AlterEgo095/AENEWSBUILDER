@@ -39,6 +39,268 @@
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
 }
 
+/* ─── Pipeline Progress ─── */
+.pipeline-progress {
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.pipeline-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #a1a1aa;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 1rem;
+}
+
+.pipeline-steps {
+  display: flex;
+  gap: 0;
+  align-items: center;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+
+.pipeline-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  position: relative;
+  flex: 1;
+  min-width: 80px;
+}
+
+.pipeline-step:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 14px;
+  left: calc(50% + 18px);
+  width: calc(100% - 36px);
+  height: 2px;
+  background: #3f3f46;
+  z-index: 0;
+}
+
+.pipeline-step.done:not(:last-child)::after {
+  background: linear-gradient(90deg, #10b981, #10b981);
+}
+
+.pipeline-step.active:not(:last-child)::after {
+  background: linear-gradient(90deg, #3b82f6, #3f3f46);
+}
+
+.step-icon {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #27272a;
+  border: 2px solid #3f3f46;
+  font-size: 14px;
+  z-index: 1;
+  transition: all 0.3s;
+}
+
+.pipeline-step.active .step-icon {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.15);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.3);
+}
+
+.pipeline-step.done .step-icon {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.15);
+}
+
+.pipeline-step.failed .step-icon {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.step-label {
+  font-size: 0.7rem;
+  color: #71717a;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.pipeline-step.active .step-label {
+  color: #3b82f6;
+  font-weight: 600;
+}
+
+.pipeline-step.done .step-label {
+  color: #10b981;
+}
+
+.pipeline-step.failed .step-label {
+  color: #ef4444;
+}
+
+.step-spinner {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid rgba(59, 130, 246, 0.3);
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.step-check {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  font-size: 12px;
+  color: #10b981;
+}
+
+.step-fail {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  font-size: 12px;
+  color: #ef4444;
+}
+
+.progress-bar-container {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 6px;
+  background: #3f3f46;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #667eea, #764ba2, #667eea);
+  background-size: 200% 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+  animation: shimmer 2s linear infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.progress-text {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #a78bfa;
+  font-family: 'Fira Code', monospace;
+  min-width: 3em;
+  text-align: right;
+}
+
+/* ─── MCP Tools Panel ─── */
+.mcp-panel {
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.mcp-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #a1a1aa;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 1rem;
+}
+
+.mcp-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.75rem;
+}
+
+.mcp-tool-card {
+  background: #0a0a0a;
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.mcp-tool-card.running {
+  border-color: #3b82f6;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.15);
+}
+
+.mcp-tool-card.success {
+  border-color: #10b981;
+}
+
+.mcp-tool-card.failed {
+  border-color: #ef4444;
+}
+
+.mcp-tool-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.35rem;
+}
+
+.mcp-tool-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e4e4e7;
+  font-family: 'Fira Code', monospace;
+}
+
+.mcp-tool-badge {
+  font-size: 0.8rem;
+}
+
+.mcp-tool-badge.running {
+  color: #3b82f6;
+  animation: pulse 1s infinite;
+}
+
+.mcp-tool-badge.success {
+  color: #10b981;
+}
+
+.mcp-tool-badge.failed {
+  color: #ef4444;
+}
+
+.mcp-tool-badge.skipped {
+  color: #71717a;
+}
+
+.mcp-tool-desc {
+  font-size: 0.75rem;
+  color: #71717a;
+  line-height: 1.4;
+}
+
+/* ─── Form ─── */
 .generator-form {
   background: #18181b;
   border: 1px solid #27272a;
@@ -115,6 +377,7 @@
   color: #52525b;
 }
 
+/* ─── Terminal ─── */
 .generator-terminal {
   background: #18181b;
   border: 1px solid #27272a;
@@ -180,17 +443,6 @@
 .control-dot.yellow { background: #f59e0b; }
 .control-dot.green { background: #10b981; }
 
-.progress-bar {
-  height: 3px;
-  background: #3f3f46;
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #667eea, #764ba2);
-  transition: width 0.5s ease;
-}
-
 .terminal-body {
   padding: 1rem;
   max-height: 400px;
@@ -233,6 +485,7 @@
   51%, 100% { opacity: 0; }
 }
 
+/* ─── Results ─── */
 .generator-result {
   padding: 1rem;
   border-top: 1px solid #27272a;

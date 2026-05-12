@@ -485,8 +485,6 @@ export class WorkerEngine {
     Object.assign(files, existingFiles);
 
     const totalFiles = plan.files.length;
-    const genEventStore = new EventStore(projectId);
-
     logger.info(
       { projectId, totalFiles, existingCount: Object.keys(existingFiles).length },
       '📍 GENERATE: Starting file generation with context awareness'

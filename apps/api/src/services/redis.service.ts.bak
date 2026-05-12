@@ -1,6 +1,5 @@
 /**
  * Redis Service - Centralized Redis Connection
- * v2 — Suppresses reconnection spam, handles errors gracefully
  */
 
 import Redis from 'ioredis';
@@ -8,7 +7,6 @@ import { config } from '../config/env.js';
 import { logger } from '../config/logger.js';
 
 let redisClient: Redis | null = null;
-let connectionLogged = false;
 
 export async function initRedis(): Promise<Redis> {
   if (redisClient) {
@@ -21,42 +19,21 @@ export async function initRedis(): Promise<Redis> {
     enableReadyCheck: true,
     lazyConnect: false,
     retryStrategy(times) {
-      if (times > 50) {
-        // After 50 retries, slow down significantly
-        return 10000;
-      }
-      const delay = Math.min(times * 100, 3000);
+      const delay = Math.min(times * 50, 2000);
       return delay;
     },
   });
 
   redisClient.on('connect', () => {
-    if (!connectionLogged) {
-      logger.info('Redis connected');
-    }
+    logger.info('✅ Redis connected');
   });
 
   redisClient.on('error', (err) => {
-    // Only log ECONNREFUSED once to avoid spam
-    const msg = err?.message || String(err);
-    if (msg.includes('ECONNREFUSED') || msg.includes('ECONNRESET')) {
-      if (!connectionLogged) {
-        logger.warn({ err: msg }, 'Redis connection issue (will retry silently)');
-      }
-    } else {
-      logger.error({ err: msg }, 'Redis error');
-    }
+    logger.error({ err }, '❌ Redis connection error');
   });
 
   redisClient.on('ready', () => {
-    if (!connectionLogged) {
-      logger.info('Redis ready');
-      connectionLogged = true;
-    }
-  });
-
-  redisClient.on('close', () => {
-    connectionLogged = false;
+    logger.info('✅ Redis ready');
   });
 
   return redisClient;

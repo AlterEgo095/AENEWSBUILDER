@@ -345,7 +345,6 @@ export class Generator {
     userPrompt: string,
     model: string
   ): Promise<string> {
-    if (!openai) throw new Error('OpenAI not configured');
     const response = await openai.chat.completions.create({
       model: model === 'gpt-4o-mini' ? 'gpt-4o-mini' : 'gpt-4o',
       messages: [
@@ -367,7 +366,6 @@ export class Generator {
     userPrompt: string,
     model: string
   ): Promise<string> {
-    if (!anthropic) throw new Error('Anthropic not configured');
     const anthropicModel =
       model === 'claude-opus'
         ? 'claude-3-opus-20240229'

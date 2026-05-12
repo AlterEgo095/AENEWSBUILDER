@@ -24,6 +24,7 @@ import { engineRoutes } from './routes/engine.routes.js';
 import { streamRoutes } from './routes/stream.routes.js';
 import { healthRoutes } from './routes/health.routes.js';
 import { adminRoutes } from './routes/admin.routes.js';
+import { chatRoutes } from './routes/chat.routes.js';
 import { initRedis } from './services/redis.service.js';
 import { initWorker } from './workers/index.js';
 import { initSentry, captureException } from './observability/sentry.js';
@@ -95,7 +96,7 @@ async function bootstrap() {
       max: config.rateLimit.maxRequests,
       timeWindow: config.rateLimit.windowMs,
       redis: await initRedis(),
-      skipOnError: false,
+      skipOnError: true,
       // 🔥 BAN IP AFTER EXCESSIVE VIOLATIONS
       ban: 10, // Ban after 10 violations
       onBanReach: (req, key) => {
@@ -226,6 +227,7 @@ async function bootstrap() {
     await app.register(engineRoutes, { prefix: '/api/engine' });
     await app.register(streamRoutes, { prefix: '/api/stream' });
     await app.register(adminRoutes, { prefix: '/api/admin' });
+    await app.register(chatRoutes, { prefix: '/api/chat' });
 
     // Prometheus Metrics
     app.get('/metrics', async (request, reply) => {

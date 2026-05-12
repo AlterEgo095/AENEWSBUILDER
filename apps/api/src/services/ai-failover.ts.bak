@@ -526,8 +526,8 @@ export class HystrixCircuitBreaker {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export class AIFailoverEngine {
-  private openai: OpenAI | null = null;
-  private anthropic: Anthropic | null = null;
+  private openai: OpenAI;
+  private anthropic: Anthropic;
   private dashscope: OpenAI | null = null;
   private costBudget = new CostBudgetManager();
   private smartCache = new SmartCache();
@@ -544,18 +544,8 @@ export class AIFailoverEngine {
   };
 
   constructor() {
-    // OpenAI — optional, only init if valid key
-    if (config.openai.enabled && config.openai.apiKey) {
-      this.openai = new OpenAI({ apiKey: config.openai.apiKey });
-    } else {
-      logger.warn('[AIFailover] OpenAI disabled — no valid API key');
-    }
-    // Anthropic — optional, only init if valid key
-    if (config.anthropic.enabled && config.anthropic.apiKey) {
-      this.anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
-    } else {
-      logger.warn('[AIFailover] Anthropic disabled — no valid API key');
-    }
+    this.openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+    this.anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
     // DashScope uses OpenAI-compatible SDK with custom baseURL
     if (config.dashscope.enabled && config.dashscope.apiKey) {
@@ -679,7 +669,6 @@ export class AIFailoverEngine {
    * Execute OpenAI request
    */
   private async executeOpenAI(model: AIModel, request: AIRequest): Promise<Omit<AIResponse, 'latency' | 'attempt'>> {
-    if (!this.openai) throw new Error('OpenAI not configured');
     const response = await this.openai.chat.completions.create({
       model: model.name,
       messages: request.messages as any,
@@ -703,7 +692,6 @@ export class AIFailoverEngine {
    * Execute Claude request
    */
   private async executeClaude(model: AIModel, request: AIRequest): Promise<Omit<AIResponse, 'latency' | 'attempt'>> {
-    if (!this.anthropic) throw new Error('Anthropic not configured');
     const response = await this.anthropic.messages.create({
       model: model.name,
       max_tokens: request.maxTokens || 4000,
