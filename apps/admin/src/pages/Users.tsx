@@ -107,19 +107,19 @@ export default function UsersPage() {
       key: 'projectCount',
       header: 'Projects',
       sortable: true,
-      render: (u) => <span className="text-sm text-zinc-300">{u.projectCount || 0}</span>,
+      render: (u: User) => <span className="text-sm text-zinc-300">{u.projectCount || 0}</span>,
     },
     {
       key: 'totalCost',
       header: 'Total Cost',
       sortable: true,
-      render: (u) => <span className="text-sm text-zinc-300">${(u.totalCost || 0).toFixed(2)}</span>,
+      render: (u: User) => <span className="text-sm text-zinc-300">${(u.totalCost || 0).toFixed(2)}</span>,
     },
     {
       key: 'createdAt',
       header: 'Joined',
       sortable: true,
-      render: (u) => (
+      render: (u: User) => (
         <span className="text-xs text-zinc-400">
           {new Date(u.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
         </span>

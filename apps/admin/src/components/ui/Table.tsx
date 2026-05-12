@@ -4,6 +4,8 @@ import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Inbox } from 'lucide
 import type { TableColumn, TableSortConfig } from '@/types';
 import { SkeletonLine } from './Skeleton';
 
+export type { TableColumn, TableSortConfig };
+
 export interface TableProps<T> {
   columns: TableColumn<T>[];
   data: T[];
