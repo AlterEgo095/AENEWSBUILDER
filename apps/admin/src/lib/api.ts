@@ -53,6 +53,16 @@ class ApiClient {
     }
 
     const res = await fetch(url, opts);
+
+    // Handle non-JSON responses (HTML error pages, 502, etc.)
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      if (!res.ok) {
+        throw new ApiError(`Server returned ${res.status} (${res.statusText})`, res.status);
+      }
+      throw new ApiError('Invalid response from server', res.status);
+    }
+
     const data = await res.json();
 
     if (!res.ok) {

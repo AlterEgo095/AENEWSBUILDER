@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { Layout } from '@/components/layout/Layout';
 import { AuthForm } from '@/components/AuthForm';
 import { SkeletonCard } from '@/components/ui/Skeleton';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // Lazy-loaded pages
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
@@ -75,9 +76,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function PageWrapper({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
     <Layout title={title} subtitle={subtitle}>
-      <Suspense fallback={<PageLoader />}>
-        {children}
-      </Suspense>
+      <ErrorBoundary>
+        <Suspense fallback={<PageLoader />}>
+          {children}
+        </Suspense>
+      </ErrorBoundary>
     </Layout>
   );
 }
