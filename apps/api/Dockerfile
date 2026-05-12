@@ -28,8 +28,8 @@ COPY . .
 # Generate Prisma Client
 RUN cd apps/api && npx prisma generate
 
-# Build API
-RUN cd apps/api && npm run build
+# Build API (use permissive tsconfig for production build)
+RUN cd apps/api && npx tsc -p tsconfig.build.json && npx tsc-alias -p tsconfig.build.json
 
 # ============================================
 # RUNNER STAGE
