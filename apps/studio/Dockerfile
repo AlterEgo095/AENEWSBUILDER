@@ -25,7 +25,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/apps/studio/node_modules ./apps/studio/node_modules
 COPY . .
 
-RUN cd apps/studio && npm run build
+RUN cd apps/studio && npx vite build
 
 # ============================================
 # RUNNER STAGE (Nginx to serve static files)
