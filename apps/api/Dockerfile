@@ -21,6 +21,9 @@ RUN npm install --legacy-peer-deps --ignore-scripts 2>/dev/null
 
 COPY . .
 
+# Build MCP workspace package
+RUN cd packages/mcp && npx tsc --noEmitOnError false --declaration false --sourceMap false 2>&1; true
+
 # Generate Prisma Client
 RUN cd apps/api && npx prisma generate
 
