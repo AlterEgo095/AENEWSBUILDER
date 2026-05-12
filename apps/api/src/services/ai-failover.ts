@@ -27,7 +27,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { LRUCache } from 'lru-cache';
 import crypto from 'crypto';
 import { logger } from '../config/logger.js';
-import { env } from '../config/env.js';
+import { env, config } from '../config/env.js';
 import {
   aiCost, aiCostAlerts, aiCacheHits, aiCacheMisses,
   aiRequests as aiRequestsMetric, aiLatency, circuitBreakerState
@@ -41,6 +41,7 @@ export enum AIProvider {
   OPENAI = 'openai',
   CLAUDE = 'claude',
   GEMINI = 'gemini',
+  DASHSCOPE = 'dashscope',
 }
 
 export interface AIModel {
@@ -131,7 +132,98 @@ export const MODEL_REGISTRY: Record<string, AIModel> = {
     costPer1kTokens: { input: 0.015, output: 0.075 },
     tier: 'advanced',
   },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Alibaba Cloud DashScope — Qwen Models (OpenAI-compatible)
+  // 100+ models available, 6 primary tiers registered here
+  // ═══════════════════════════════════════════════════════════════
+  'qwen-turbo': {
+    provider: AIProvider.DASHSCOPE,
+    name: 'qwen-turbo',
+    maxTokens: 131072,
+    costPer1kTokens: { input: 0.00012, output: 0.00036 },
+    tier: 'fast',
+  },
+  'qwen-plus': {
+    provider: AIProvider.DASHSCOPE,
+    name: 'qwen-plus',
+    maxTokens: 131072,
+    costPer1kTokens: { input: 0.0004, output: 0.0012 },
+    tier: 'standard',
+  },
+  'qwen-max': {
+    provider: AIProvider.DASHSCOPE,
+    name: 'qwen-max',
+    maxTokens: 32768,
+    costPer1kTokens: { input: 0.0012, output: 0.0036 },
+    tier: 'advanced',
+  },
+  'qwen3-235b-a22b': {
+    provider: AIProvider.DASHSCOPE,
+    name: 'qwen3-235b-a22b',
+    maxTokens: 131072,
+    costPer1kTokens: { input: 0.0003, output: 0.0009 },
+    tier: 'standard',
+  },
+  'qwq-32b': {
+    provider: AIProvider.DASHSCOPE,
+    name: 'qwq-32b',
+    maxTokens: 131072,
+    costPer1kTokens: { input: 0.0005, output: 0.0015 },
+    tier: 'standard',
+  },
+  'qwen-long': {
+    provider: AIProvider.DASHSCOPE,
+    name: 'qwen-long',
+    maxTokens: 10000000,
+    costPer1kTokens: { input: 0.00005, output: 0.0002 },
+    tier: 'fast',
+  },
 };
+
+// ═══════════════════════════════════════════════════════════════
+// 🔄 MODEL ROTATION POOLS (load-balanced per tier)
+// ═══════════════════════════════════════════════════════════════
+
+export const MODEL_ROTATION_POOLS: Record<string, string[]> = {
+  fast: ['qwen-turbo', 'qwen-long', 'gpt-4o-mini', 'claude-3-haiku'],
+  standard: ['qwen3-235b-a22b', 'qwq-32b', 'qwen-plus', 'claude-3-sonnet', 'gpt-4o'],
+  advanced: ['qwen-max', 'claude-3-opus', 'gpt-4-turbo'],
+};
+
+/** Round-robin rotation state */
+class ModelRotator {
+  private counters = new Map<string, number>();
+
+  /**
+   * Pick the next model in the rotation pool for the given tier.
+   * Skips providers whose circuit breaker is OPEN.
+   */
+  pick(tier: 'fast' | 'standard' | 'advanced', skipProviders?: Set<AIProvider>): string | null {
+    const pool = MODEL_ROTATION_POOLS[tier];
+    if (!pool || pool.length === 0) return null;
+
+    const idx = (this.counters.get(tier) || 0) % pool.length;
+    this.counters.set(tier, idx + 1);
+
+    // Try each model in the pool, starting from the rotation index
+    for (let i = 0; i < pool.length; i++) {
+      const modelId = pool[(idx + i) % pool.length];
+      const model = MODEL_REGISTRY[modelId];
+      if (!model) continue;
+      if (skipProviders?.has(model.provider)) continue;
+      return modelId;
+    }
+
+    return null;
+  }
+
+  /** Reset all counters */
+  reset(): void {
+    this.counters.clear();
+  }
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 💰 COST BUDGET MANAGER (with spike detection & alerts)
@@ -420,6 +512,13 @@ export class HystrixCircuitBreaker {
   getState(provider: AIProvider): CircuitBreakerState {
     return this.states.get(provider)!;
   }
+
+  /**
+   * Get all states (for rotation logic)
+   */
+  getAllStates(): Map<AIProvider, CircuitBreakerState> {
+    return this.states;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -429,15 +528,17 @@ export class HystrixCircuitBreaker {
 export class AIFailoverEngine {
   private openai: OpenAI;
   private anthropic: Anthropic;
+  private dashscope: OpenAI | null = null;
   private costBudget = new CostBudgetManager();
   private smartCache = new SmartCache();
   private circuitBreaker = new HystrixCircuitBreaker();
+  private rotator = new ModelRotator();
 
-  // Default cascade: fast → standard → advanced
+  // Default cascade: DashScope fast → OpenAI fast → Claude fast → escalate
   private readonly DEFAULT_CASCADE: FailoverConfig = {
-    primary: 'gpt-4o-mini',
-    fallbacks: ['claude-3-haiku', 'claude-3-sonnet', 'gpt-4o'],
-    maxRetries: 3,
+    primary: 'qwen-turbo',
+    fallbacks: ['qwen-plus', 'gpt-4o-mini', 'claude-3-haiku', 'qwen-max', 'claude-3-sonnet', 'gpt-4o'],
+    maxRetries: 6,
     retryDelay: 2000,
     timeout: 30000,
   };
@@ -445,6 +546,17 @@ export class AIFailoverEngine {
   constructor() {
     this.openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
     this.anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+
+    // DashScope uses OpenAI-compatible SDK with custom baseURL
+    if (config.dashscope.enabled && config.dashscope.apiKey) {
+      this.dashscope = new OpenAI({
+        apiKey: config.dashscope.apiKey,
+        baseURL: config.dashscope.baseUrl,
+      });
+      logger.info(`[AIFailover] DashScope enabled: ${config.dashscope.baseUrl}`);
+    } else {
+      logger.warn('[AIFailover] DashScope disabled — no API key configured');
+    }
   }
 
   /**
@@ -534,8 +646,21 @@ export class AIFailoverEngine {
       setTimeout(() => reject(new Error(`Timeout after ${timeout}ms`)), timeout);
     });
 
-    const executePromise =
-      model.provider === AIProvider.OPENAI ? this.executeOpenAI(model, request) : this.executeClaude(model, request);
+    let executePromise: Promise<Omit<AIResponse, 'latency' | 'attempt'>>;
+
+    switch (model.provider) {
+      case AIProvider.OPENAI:
+        executePromise = this.executeOpenAI(model, request);
+        break;
+      case AIProvider.CLAUDE:
+        executePromise = this.executeClaude(model, request);
+        break;
+      case AIProvider.DASHSCOPE:
+        executePromise = this.executeDashScope(model, request);
+        break;
+      default:
+        throw new Error(`Unknown provider: ${model.provider}`);
+    }
 
     return Promise.race([executePromise, timeoutPromise]);
   }
@@ -587,6 +712,92 @@ export class AIFailoverEngine {
       model: model.name,
       usage: { inputTokens, outputTokens, cost },
     };
+  }
+
+  /**
+   * Execute DashScope request (OpenAI-compatible API)
+   */
+  private async executeDashScope(model: AIModel, request: AIRequest): Promise<Omit<AIResponse, 'latency' | 'attempt'>> {
+    if (!this.dashscope) {
+      throw new Error('DashScope client not initialized — check DASHSCOPE_API_KEY');
+    }
+
+    const response = await this.dashscope.chat.completions.create({
+      model: model.name,
+      messages: request.messages as any,
+      temperature: request.temperature || 0.7,
+      max_tokens: request.maxTokens || 4000,
+    });
+
+    const inputTokens = response.usage?.prompt_tokens || 0;
+    const outputTokens = response.usage?.completion_tokens || 0;
+    const cost = (inputTokens / 1000) * model.costPer1kTokens.input + (outputTokens / 1000) * model.costPer1kTokens.output;
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      provider: AIProvider.DASHSCOPE,
+      model: model.name,
+      usage: { inputTokens, outputTokens, cost },
+    };
+  }
+
+  /**
+   * Execute with model rotation — picks the next model in the tier pool
+   */
+  async executeWithRotation(
+    request: AIRequest,
+    tier: 'fast' | 'standard' | 'advanced' = 'fast'
+  ): Promise<AIResponse> {
+    const startTime = Date.now();
+
+    // Check cache first
+    const cached = this.smartCache.get(request.messages);
+    if (cached) return cached;
+
+    // Get providers with open circuit breakers
+    const openProviders = new Set<AIProvider>();
+    for (const [provider, state] of this.circuitBreaker.getAllStates()) {
+      if (state.state === 'OPEN') openProviders.add(provider);
+    }
+
+    // Try rotation pool for the tier
+    const modelId = this.rotator.pick(tier, openProviders);
+    if (!modelId) {
+      throw new Error(`No available models in ${tier} tier`);
+    }
+
+    const model = MODEL_REGISTRY[modelId];
+    if (!model) {
+      throw new Error(`Model ${modelId} not found in registry`);
+    }
+
+    logger.info(`[AIFailover] Rotation: ${modelId} (${model.provider}) from ${tier} tier`);
+
+    const response = await this.execute({
+      ...request,
+    }, {
+      primary: modelId,
+      fallbacks: MODEL_ROTATION_POOLS[tier].filter((m) => m !== modelId),
+      maxRetries: MODEL_ROTATION_POOLS[tier].length,
+      retryDelay: 1500,
+      timeout: 30000,
+    });
+
+    return response;
+  }
+
+  /**
+   * Get DashScope client (for external use)
+   */
+  getDashScopeClient(): OpenAI | null {
+    return this.dashscope;
+  }
+
+  /**
+   * Check if DashScope is available
+   */
+  isDashScopeEnabled(): boolean {
+    return this.dashscope !== null;
   }
 
   /**

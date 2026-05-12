@@ -15,7 +15,7 @@ export async function initRedis(): Promise<Redis> {
 
   redisClient = new Redis(config.redis.url, {
     password: config.redis.password,
-    maxRetriesPerRequest: 3,
+    maxRetriesPerRequest: null, // Required by BullMQ
     enableReadyCheck: true,
     lazyConnect: false,
     retryStrategy(times) {
@@ -50,10 +50,18 @@ export function getRedis(): Redis {
  * Cache Helper with TTL
  */
 export class CacheService {
-  private redis: Redis;
+  private _redis: Redis | null = null;
 
-  constructor() {
-    this.redis = getRedis();
+  /** Lazily get Redis connection (safe to call before initRedis) */
+  private get redis(): Redis {
+    if (!this._redis) {
+      try {
+        this._redis = getRedis();
+      } catch {
+        throw new Error('Redis not initialized yet. Ensure initRedis() is called before using CacheService.');
+      }
+    }
+    return this._redis;
   }
 
   /**

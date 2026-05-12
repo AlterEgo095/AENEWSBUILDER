@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { Layout } from '@/components/layout/Layout';
 import { AuthForm } from '@/components/AuthForm';
 import { SkeletonCard } from '@/components/ui/Skeleton';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // Lazy-loaded pages
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
@@ -30,7 +31,7 @@ function PageLoader() {
 }
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, isAdmin, loading } = useAuth();
 
   if (loading) {
     return (
@@ -44,15 +45,42 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" replace />;
   }
 
+  if (!isAdmin) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-surface-0">
+        <div className="text-center space-y-4 max-w-md mx-auto px-4">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-red-500/10 flex items-center justify-center">
+            <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <h2 className="text-lg font-semibold text-white">Acces restreint</h2>
+          <p className="text-sm text-zinc-400">
+            Vous n'avez pas les permissions administrateur necessaires pour acceder a cette section.
+            Contactez un administrateur si vous pensez qu'il s'agit d'une erreur.
+          </p>
+          <button
+            onClick={() => window.location.href = '/'}
+            className="px-4 py-2 rounded-lg bg-brand/20 text-brand text-sm font-medium hover:bg-brand/30 transition-colors"
+          >
+            Retour a l'accueil
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return <>{children}</>;
 }
 
 function PageWrapper({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
     <Layout title={title} subtitle={subtitle}>
-      <Suspense fallback={<PageLoader />}>
-        {children}
-      </Suspense>
+      <ErrorBoundary>
+        <Suspense fallback={<PageLoader />}>
+          {children}
+        </Suspense>
+      </ErrorBoundary>
     </Layout>
   );
 }
@@ -80,7 +108,7 @@ export default function App() {
         }
       />
 
-      {/* Protected Routes */}
+      {/* Protected Admin Routes */}
       <Route
         path="/"
         element={

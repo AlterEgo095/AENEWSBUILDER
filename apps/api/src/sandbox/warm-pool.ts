@@ -36,7 +36,19 @@ import {
 } from '../observability/metrics.js';
 
 const execAsync = promisify(exec);
-const docker = new Docker();
+import { existsSync } from 'fs';
+
+const DOCKER_AVAILABLE = existsSync('/var/run/docker.sock');
+let docker: Docker | null = null;
+if (DOCKER_AVAILABLE) {
+  try {
+    docker = new Docker();
+  } catch (e) {
+    // ignore
+  }
+} else {
+  logger.warn('[WarmPool] Docker socket not found - sandbox features disabled');
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 🔧 TYPES & INTERFACES
@@ -158,7 +170,17 @@ export class SandboxWarmPool extends EventEmitter {
 
   constructor() {
     super();
-    this.initialize();
+    if (!docker) {
+      logger.warn('[WarmPool] Docker unavailable - running in degraded mode');
+      this.dockerHealthy = false;
+      return;
+    }
+    try {
+      this.initialize();
+    } catch (error: any) {
+      logger.warn(`[WarmPool] Initialization deferred: ${error.message}`);
+      this.dockerHealthy = false;
+    }
     this.startDockerHealthCheck();
     this.startMemoryLeakDetector();
     this.startZombieKiller();
@@ -292,6 +314,7 @@ export class SandboxWarmPool extends EventEmitter {
    */
   private startZombieKiller(): void {
     setInterval(async () => {
+      if (!docker) return;
       try {
         const containers = await docker.listContainers({
           all: true,
@@ -342,6 +365,7 @@ export class SandboxWarmPool extends EventEmitter {
    */
   private startDiskSaturationMonitor(): void {
     setInterval(async () => {
+      if (!docker) return;
       try {
         const df = await docker.df();
         const volumesSize = df.Volumes?.reduce((sum, v) => sum + (v.UsageData?.Size || 0), 0) || 0;
@@ -376,6 +400,7 @@ export class SandboxWarmPool extends EventEmitter {
    */
   private startDockerHealthCheck(): void {
     this.healthCheckInterval = setInterval(async () => {
+      if (!docker) return;
       try {
         await docker.ping();
         if (!this.dockerHealthy) {

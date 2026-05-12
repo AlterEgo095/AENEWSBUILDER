@@ -102,12 +102,14 @@ export interface DashboardMetrics {
 }
 
 export interface PaginatedResponse<T> {
-  items: T[];
+  data: T[];
   pagination: {
     page: number;
     limit: number;
     total: number;
     pages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
   };
 }
 

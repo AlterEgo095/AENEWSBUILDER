@@ -31,6 +31,11 @@ const envSchema = z.object({
   
   // Anthropic
   ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-'),
+
+  // Alibaba Cloud DashScope (OpenAI-compatible, 100+ models)
+  DASHSCOPE_API_KEY: z.string().startsWith('sk-').optional(),
+  DASHSCOPE_BASE_URL: z.string().default('https://dashscope.aliyuncs.com/compatible-mode/v1'),
+  DASHSCOPE_ENABLED: z.string().transform((v) => v === 'true').default('true'),
   
   // CORS
   CORS_ORIGINS: z.string().transform((str) => str.split(',')),
@@ -101,6 +106,11 @@ export const config = {
   },
   anthropic: {
     apiKey: env.ANTHROPIC_API_KEY,
+  },
+  dashscope: {
+    apiKey: env.DASHSCOPE_API_KEY || '',
+    baseUrl: env.DASHSCOPE_BASE_URL,
+    enabled: env.DASHSCOPE_ENABLED && !!env.DASHSCOPE_API_KEY,
   },
   cors: {
     origins: env.CORS_ORIGINS,

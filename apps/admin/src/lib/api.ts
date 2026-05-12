@@ -53,6 +53,16 @@ class ApiClient {
     }
 
     const res = await fetch(url, opts);
+
+    // Handle non-JSON responses (HTML error pages, 502, etc.)
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      if (!res.ok) {
+        throw new ApiError(`Server returned ${res.status} (${res.statusText})`, res.status);
+      }
+      throw new ApiError('Invalid response from server', res.status);
+    }
+
     const data = await res.json();
 
     if (!res.ok) {
@@ -100,23 +110,29 @@ class ApiClient {
   }
 
   async getMe() {
-    // /auth/me returns the user if authenticated, or 401
-    const res = await this.get<User | { valid: boolean; user: User }>('/auth/me');
-    // Map to ApiResponse<User>
-    if ('valid' in res && res.user) {
-      return { success: res.valid, data: res.user } as ApiResponse<User>;
+    // API may return from /auth/me (direct user) or /auth/verify ({valid, user})
+    // Try /auth/me first, fallback to /auth/verify
+    try {
+      const res = await this.get<User>('/auth/me');
+      if (res && 'id' in res) {
+        return { success: true, data: res } as ApiResponse<User>;
+      }
+    } catch {
+      // /auth/me not available, try /auth/verify
     }
-    if ('id' in res) {
-      return { success: true, data: res as User } as ApiResponse<User>;
-    }
-    return { success: false, error: 'Not authenticated' } as ApiResponse<User>;
+    const res = await this.get<{ valid: boolean; user?: User }>('/auth/verify');
+    return {
+      success: !!res.valid && !!res.user,
+      data: res.user || null,
+    } as ApiResponse<User>;
   }
 
   // ─── Users ───────────────────────────────────
   async getUsers(page = 1, limit = 20, search?: string) {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) });
     if (search) params.set('search', search);
-    return this.get<ApiResponse<PaginatedResponse<User>>>(`/admin/users?${params}`);
+    // Backend returns PaginatedResponse directly (not wrapped in ApiResponse)
+    return this.get<PaginatedResponse<User>>(`/admin/users?${params}`);
   }
 
   async updateUser(id: string, data: Partial<User>) {

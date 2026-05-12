@@ -25,11 +25,14 @@ export function useApi<T>(
     error: null,
   });
   const mountedRef = useRef(true);
+  // Store fetcher in a ref to avoid triggering re-fetch on every render
+  const fetcherRef = useRef(fetcher);
+  fetcherRef.current = fetcher;
 
   const execute = useCallback(async () => {
     setState(prev => ({ ...prev, loading: true, error: null }));
     try {
-      const data = await fetcher();
+      const data = await fetcherRef.current();
       if (mountedRef.current) {
         setState({ data, loading: false, error: null });
         onSuccess?.(data);
@@ -43,7 +46,7 @@ export function useApi<T>(
         onError?.(message);
       }
     }
-  }, [fetcher, onSuccess, onError]);
+  }, [onSuccess, onError]);
 
   useEffect(() => {
     mountedRef.current = true;

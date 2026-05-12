@@ -16,6 +16,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import type { FileSpec } from '../services/orchestrator.service.js';
+import { MODEL_REGISTRY, AIProvider, MODEL_ROTATION_POOLS } from '../services/ai-failover.js';
 
 // ============================================
 // 🔹 TYPES
@@ -43,6 +44,44 @@ function estimateTokens(text: string): number {
 const openai = new OpenAI({ apiKey: config.openai.apiKey });
 const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
 
+// DashScope client (OpenAI-compatible with custom baseURL)
+let dashscope: OpenAI | null = null;
+if (config.dashscope.enabled && config.dashscope.apiKey) {
+  dashscope = new OpenAI({
+    apiKey: config.dashscope.apiKey,
+    baseURL: config.dashscope.baseUrl,
+  });
+  logger.info(`[Generator] DashScope enabled: ${config.dashscope.baseUrl}`);
+}
+
+// Round-robin model rotation counter
+let rotationCounters: Record<string, number> = {
+  'qwen-turbo': 0, 'qwen-plus': 0, 'qwen-max': 0,
+  'qwq-32b': 0, 'qwen3-235b-a22b': 0, 'qwen-long': 0,
+};
+
+/**
+ * Pick next DashScope model in the same tier (round-robin rotation)
+ * Falls back to OpenAI/Anthropic if DashScope is unavailable
+ */
+function rotateModel(model: string): string {
+  const registry = MODEL_REGISTRY[model];
+  if (!registry) return model;
+
+  if (registry.provider === AIProvider.DASHSCOPE && dashscope) {
+    const pool = MODEL_ROTATION_POOLS[registry.tier] || [];
+    const dsModels = pool.filter(m => MODEL_REGISTRY[m]?.provider === AIProvider.DASHSCOPE);
+    if (dsModels.length > 1) {
+      const idx = (rotationCounters[model] || 0) % dsModels.length;
+      rotationCounters[model] = idx + 1;
+      const rotated = dsModels[idx];
+      logger.debug(`[Generator] Rotating ${model} → ${rotated}`);
+      return rotated;
+    }
+  }
+  return model;
+}
+
 export class Generator {
   /** Max tokens for the dependency context window (keep prompt focused) */
   private readonly CONTEXT_TOKEN_BUDGET = 4000;
@@ -57,12 +96,15 @@ export class Generator {
    */
   async generateFile(
     fileSpec: FileSpec,
-    model: 'gpt-4o' | 'gpt-4o-mini' | 'claude-sonnet' | 'claude-opus',
+    model: string,
     context: GenerationContext
   ): Promise<string> {
+    // Apply model rotation (round-robin within same tier)
+    const activeModel = rotateModel(model);
+
     logger.info(
-      { file: fileSpec.path, model, deps: fileSpec.dependencies.length },
-      '🔨 Generating file (context-aware)'
+      { file: fileSpec.path, model: activeModel, original: model, deps: fileSpec.dependencies.length },
+      '🔨 Generating file (context-aware + rotation)'
     );
 
     const prompt = this.buildPrompt(fileSpec, context);
@@ -70,11 +112,26 @@ export class Generator {
 
     try {
       let rawContent: string;
+      const registry = MODEL_REGISTRY[activeModel];
+      const provider = registry?.provider;
 
-      if (model.startsWith('gpt')) {
-        rawContent = await this.generateWithOpenAI(systemPrompt, prompt, model);
+      if (provider === AIProvider.DASHSCOPE && dashscope) {
+        rawContent = await this.generateWithDashScope(systemPrompt, prompt, activeModel);
+      } else if (provider === AIProvider.OPENAI || activeModel.startsWith('gpt')) {
+        rawContent = await this.generateWithOpenAI(systemPrompt, prompt, activeModel);
+      } else if (provider === AIProvider.CLAUDE || activeModel.startsWith('claude')) {
+        rawContent = await this.generateWithAnthropic(systemPrompt, prompt, activeModel);
       } else {
-        rawContent = await this.generateWithAnthropic(systemPrompt, prompt, model);
+        // Unknown model — try DashScope first, then OpenAI fallback
+        if (dashscope) {
+          try {
+            rawContent = await this.generateWithDashScope(systemPrompt, prompt, activeModel);
+          } catch {
+            rawContent = await this.generateWithOpenAI(systemPrompt, prompt, 'gpt-4o');
+          }
+        } else {
+          rawContent = await this.generateWithOpenAI(systemPrompt, prompt, 'gpt-4o');
+        }
       }
 
       // Strip markdown code fences if the LLM wrapped the output
@@ -335,6 +392,31 @@ export class Generator {
   // ============================================
   // 🔧 UTILITIES
   // ============================================
+
+  /**
+   * Generate using DashScope (Qwen models via OpenAI-compatible API)
+   */
+  private async generateWithDashScope(
+    systemPrompt: string,
+    userPrompt: string,
+    model: string
+  ): Promise<string> {
+    if (!dashscope) {
+      throw new Error('DashScope client not initialized');
+    }
+
+    const response = await dashscope.chat.completions.create({
+      model: model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.2,
+      max_tokens: config.cost.maxTokensPerRequest,
+    });
+
+    return response.choices[0]?.message?.content || '';
+  }
 
   /**
    * Extract code from markdown code blocks if present.

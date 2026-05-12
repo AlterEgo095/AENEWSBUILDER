@@ -11,6 +11,16 @@ import { logger } from '../config/logger.js';
 const openai = new OpenAI({ apiKey: config.openai.apiKey });
 const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
 
+// DashScope client (OpenAI-compatible with custom baseURL)
+let dashscope: OpenAI | null = null;
+if (config.dashscope.enabled && config.dashscope.apiKey) {
+  dashscope = new OpenAI({
+    apiKey: config.dashscope.apiKey,
+    baseURL: config.dashscope.baseUrl,
+  });
+  logger.info(`[AutoHealing] DashScope enabled: ${config.dashscope.baseUrl}`);
+}
+
 export interface FixResult {
   success: boolean;
   files: Record<string, string>;
@@ -39,11 +49,11 @@ export class AutoHealing {
 
     try {
       // Escalate model based on retry count
-      const model = this.selectModel(retryCount);
-      logger.info({ model }, '🎯 Using model for healing');
+      const { model: selectedModel, provider: selectedProvider } = this.selectModel(retryCount);
+      logger.info({ model: selectedModel, provider: selectedProvider }, '🎯 Using model for healing');
 
       // Analyze errors and generate fixes
-      const fixes = await this.generateFixes(files, errors, model);
+      const fixes = await this.generateFixes(files, errors, selectedModel, selectedProvider);
 
       // Apply fixes
       const fixedFiles = this.applyFixes(files, fixes);
@@ -65,21 +75,33 @@ export class AutoHealing {
   }
 
   /**
-   * Select model based on retry count (escalation)
+   * Select model based on retry count (escalation with DashScope priority)
+   * Retry 0: qwen-turbo (fast, cheap) → Retry 1: qwen-plus (standard) → Retry 2: qwen-max (advanced)
    */
-  private selectModel(retryCount: number): string {
-    if (retryCount === 0) return 'gpt-4o-mini';
-    if (retryCount === 1) return 'claude-sonnet';
-    return 'claude-opus';
+  private selectModel(retryCount: number): { model: string; provider: 'dashscope' | 'openai' | 'anthropic' } {
+    if (dashscope) {
+      // DashScope-first escalation
+      if (retryCount === 0) return { model: 'qwen-turbo', provider: 'dashscope' };
+      if (retryCount === 1) return { model: 'qwen-plus', provider: 'dashscope' };
+      if (retryCount === 2) return { model: 'qwen-max', provider: 'dashscope' };
+      // Fallback to OpenAI/Anthropic for higher retries
+      if (retryCount === 3) return { model: 'gpt-4o', provider: 'openai' };
+      return { model: 'claude-opus', provider: 'anthropic' };
+    }
+    // Legacy escalation without DashScope
+    if (retryCount === 0) return { model: 'gpt-4o-mini', provider: 'openai' };
+    if (retryCount === 1) return { model: 'claude-3-5-sonnet-20241022', provider: 'anthropic' };
+    return { model: 'claude-3-opus-20240229', provider: 'anthropic' };
   }
 
   /**
-   * Generate fixes using AI
+   * Generate fixes using AI (supports DashScope, OpenAI, Anthropic)
    */
   private async generateFixes(
     files: Record<string, string>,
     errors: string[],
-    model: string
+    model: string,
+    provider: 'dashscope' | 'openai' | 'anthropic'
   ): Promise<Array<{ file: string; fix: string; description: string }>> {
     const prompt = `Analyze these errors and suggest fixes:
 
@@ -104,9 +126,27 @@ Return ONLY valid JSON.`;
 
     let response: string;
 
-    if (model.startsWith('gpt')) {
+    if (provider === 'dashscope' && dashscope) {
+      const completion = await dashscope.chat.completions.create({
+        model: model,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert debugger. Analyze errors and provide precise fixes.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 4000,
+        response_format: { type: 'json_object' },
+      });
+      response = completion.choices[0]?.message?.content || '{}';
+    } else if (provider === 'openai') {
       const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
+        model: model === 'gpt-4o' ? 'gpt-4o' : 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
