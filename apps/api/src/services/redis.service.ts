@@ -15,7 +15,7 @@ export async function initRedis(): Promise<Redis> {
 
   redisClient = new Redis(config.redis.url, {
     password: config.redis.password,
-    maxRetriesPerRequest: 3,
+    maxRetriesPerRequest: null, // Required by BullMQ
     enableReadyCheck: true,
     lazyConnect: false,
     retryStrategy(times) {
