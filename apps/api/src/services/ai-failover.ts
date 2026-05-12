@@ -27,7 +27,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { LRUCache } from 'lru-cache';
 import crypto from 'crypto';
 import { logger } from '../config/logger.js';
-import { env } from '../config/env.js';
+import { env, config } from '../config/env.js';
 import {
   aiCost, aiCostAlerts, aiCacheHits, aiCacheMisses,
   aiRequests as aiRequestsMetric, aiLatency, circuitBreakerState
