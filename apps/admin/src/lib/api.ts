@@ -102,7 +102,8 @@ class ApiClient {
   async getUsers(page = 1, limit = 20, search?: string) {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) });
     if (search) params.set('search', search);
-    return this.get<ApiResponse<PaginatedResponse<User>>>(`/admin/users?${params}`);
+    // Backend returns PaginatedResponse directly (not wrapped in ApiResponse)
+    return this.get<PaginatedResponse<User>>(`/admin/users?${params}`);
   }
 
   async updateUser(id: string, data: Partial<User>) {

@@ -57,12 +57,16 @@ export async function authRoutes(app: FastifyInstance) {
       const saltRounds = 12;
       const hashedPassword = await bcrypt.hash(body.password, saltRounds);
 
+      // Check if this is the first user — bootstrap them as admin
+      const userCount = await prisma.user.count();
+
       // Create user in database
       const user = await prisma.user.create({
         data: {
           email: body.email,
           password: hashedPassword,
           name: body.name,
+          role: userCount === 0 ? 'admin' : 'user',
         },
       });
 
