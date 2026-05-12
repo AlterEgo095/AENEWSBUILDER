@@ -80,8 +80,19 @@ class ApiClient {
   }
 
   // ─── Auth ────────────────────────────────────
+  // API returns { success, token, user } but admin expects { success, data: { token, user } }
   async login(email: string, password: string) {
-    return this.post<ApiResponse<{ token: string; user: User }>>('/auth/login', { email, password });
+    const res = await this.post<{ success: boolean; token: string; user: User; error?: string }>('/auth/login', { email, password });
+    if (res.success && res.token) {
+      return {
+        success: true,
+        data: { token: res.token, user: res.user },
+      } as ApiResponse<{ token: string; user: User }>;
+    }
+    return {
+      success: false,
+      error: res.error || 'Login failed',
+    } as ApiResponse<{ token: string; user: User }>;
   }
 
   async register(email: string, password: string, name: string) {
@@ -89,7 +100,16 @@ class ApiClient {
   }
 
   async getMe() {
-    return this.get<ApiResponse<User>>('/auth/me');
+    // /auth/me returns the user if authenticated, or 401
+    const res = await this.get<User | { valid: boolean; user: User }>('/auth/me');
+    // Map to ApiResponse<User>
+    if ('valid' in res && res.user) {
+      return { success: res.valid, data: res.user } as ApiResponse<User>;
+    }
+    if ('id' in res) {
+      return { success: true, data: res as User } as ApiResponse<User>;
+    }
+    return { success: false, error: 'Not authenticated' } as ApiResponse<User>;
   }
 
   // ─── Users ───────────────────────────────────
