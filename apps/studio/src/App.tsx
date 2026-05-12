@@ -1,22 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { Terminal } from './components/Terminal';
-import { Preview } from './components/Preview';
-import { JobManager } from './components/JobManager';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AuthForm } from './components/AuthForm';
-import { useSSE } from './hooks/useSSE';
+import { Dashboard } from './components/Dashboard';
+import { AIChat } from './components/AIChat';
+import { ProjectGenerator } from './components/ProjectGenerator';
 import './App.css';
-
-interface ProjectState {
-  jobId: string | null;
-  status: 'idle' | 'queued' | 'processing' | 'completed' | 'failed';
-  progress: number;
-  logs: string[];
-  artifacts?: {
-    files: string[];
-    preview: string;
-    deployUrl?: string;
-  };
-}
 
 interface User {
   id: string;
@@ -24,193 +11,97 @@ interface User {
   name: string;
 }
 
+export type ActiveTab = 'dashboard' | 'ai-chat' | 'create';
+
 function App() {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('aenews:token'));
   const [user, setUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('aenews:user');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem('aenews:user');
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
   });
+  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  const [projectState, setProjectState] = useState<ProjectState>({
-    jobId: null,
-    status: 'idle',
-    progress: 0,
-    logs: [],
-  });
-
-  const [prompt, setPrompt] = useState('');
-  const [savedJobs, setSavedJobs] = useState<string[]>([]);
-
-  // Load saved jobs from localStorage
-  useEffect(() => {
-    const saved = localStorage.getItem('aenews:jobs');
-    if (saved) {
-      setSavedJobs(JSON.parse(saved));
-    }
-  }, []);
-
-  // SSE connection for real-time updates
-  const { events } = useSSE(
-    projectState.jobId ? `/api/stream/${projectState.jobId}` : null
-  );
-
-  useEffect(() => {
-    if (events.length > 0) {
-      const latestEvent = events[events.length - 1];
-
-      setProjectState((prev) => ({
-        ...prev,
-        status: latestEvent.type === 'completed' ? 'completed' : 'processing',
-        progress: latestEvent.data?.progress || prev.progress,
-        logs: [...prev.logs, latestEvent.data?.message || JSON.stringify(latestEvent)],
-        artifacts: latestEvent.data?.artifacts || prev.artifacts,
-      }));
-    }
-  }, [events]);
-
-  // Auth handlers
-  const handleAuthSuccess = (newToken: string, newUser: User) => {
+  const handleAuthSuccess = useCallback((newToken: string, newUser: User) => {
     setToken(newToken);
     setUser(newUser);
     localStorage.setItem('aenews:token', newToken);
     localStorage.setItem('aenews:user', JSON.stringify(newUser));
-  };
+  }, []);
 
-  const handleLogout = () => {
+  const handleLogout = useCallback(() => {
     setToken(null);
     setUser(null);
     localStorage.removeItem('aenews:token');
     localStorage.removeItem('aenews:user');
-    setSavedJobs([]);
-    localStorage.removeItem('aenews:jobs');
-  };
+  }, []);
 
-  // Show auth form if not logged in
   if (!token || !user) {
     return <AuthForm onAuthSuccess={handleAuthSuccess} />;
   }
 
-  const handleSubmit = async () => {
-    if (!prompt.trim()) return;
-
-    try {
-      const name = prompt.substring(0, 50).split(' ').slice(0, 3).join(' ');
-
-      const response = await fetch('/api/projects', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          prompt,
-          name,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || data.error || 'Failed to create project');
-      }
-
-      const newJobId = data.projectId;
-
-      setProjectState({
-        jobId: newJobId,
-        status: 'queued',
-        progress: 0,
-        logs: [`Job ${newJobId} created and queued`],
-      });
-
-      // Save job ID
-      const updatedJobs = [...savedJobs, newJobId];
-      setSavedJobs(updatedJobs);
-      localStorage.setItem('aenews:jobs', JSON.stringify(updatedJobs));
-    } catch (error: any) {
-      setProjectState((prev) => ({
-        ...prev,
-        status: 'failed',
-        logs: [...prev.logs, `Error: ${error.message}`],
-      }));
-
-      // If 401, token expired
-      if (error.message.includes('Unauthorized') || error.message.includes('401')) {
-        handleLogout();
-      }
-    }
-  };
-
-  const handleResumeJob = (jobId: string) => {
-    setProjectState({
-      jobId,
-      status: 'processing',
-      progress: 0,
-      logs: [`Resuming job ${jobId}`],
-    });
-  };
-
   return (
-    <div className="app">
-      <header className="app-header">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h1>AENEWS STUDIO</h1>
-            <p>AI-Powered Code Generation Platform</p>
+    <div className="studio-app">
+      {/* Sidebar */}
+      <aside className={`studio-sidebar ${sidebarOpen ? 'open' : 'collapsed'}`}>
+        <div className="sidebar-header">
+          <div className="logo">
+            <span className="logo-icon">&#x26A1;</span>
+            {sidebarOpen && <span className="logo-text">AENEWS STUDIO</span>}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <span style={{ fontSize: '14px', opacity: 0.8 }}>{user.email}</span>
-            <button onClick={handleLogout} style={{
-              padding: '6px 16px',
-              borderRadius: '6px',
-              border: '1px solid rgba(255,255,255,0.2)',
-              background: 'rgba(255,255,255,0.1)',
-              color: 'white',
-              cursor: 'pointer',
-              fontSize: '13px',
-            }}>
-              Logout
-            </button>
+          <button className="toggle-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>
+            {sidebarOpen ? '\u25C0' : '\u25B6'}
+          </button>
+        </div>
+
+        <nav className="sidebar-nav">
+          <button
+            className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setActiveTab('dashboard')}
+          >
+            <span className="nav-icon">&#x1F4CA;</span>
+            {sidebarOpen && <span className="nav-label">Dashboard</span>}
+          </button>
+          <button
+            className={`nav-item ${activeTab === 'ai-chat' ? 'active' : ''}`}
+            onClick={() => setActiveTab('ai-chat')}
+          >
+            <span className="nav-icon">&#x1F916;</span>
+            {sidebarOpen && <span className="nav-label">AI Assistant</span>}
+          </button>
+          <button
+            className={`nav-item ${activeTab === 'create' ? 'active' : ''}`}
+            onClick={() => setActiveTab('create')}
+          >
+            <span className="nav-icon">&#x1F680;</span>
+            {sidebarOpen && <span className="nav-label">New Project</span>}
+          </button>
+        </nav>
+
+        <div className="sidebar-footer">
+          <div className="user-info">
+            <span className="user-avatar">{user.name?.[0]?.toUpperCase() || 'U'}</span>
+            {sidebarOpen && (
+              <div className="user-details">
+                <span className="user-name">{user.name}</span>
+                <span className="user-email">{user.email}</span>
+              </div>
+            )}
           </div>
+          <button className="logout-btn" onClick={handleLogout} title="Logout">
+            &#x1F6AA;
+          </button>
         </div>
-      </header>
+      </aside>
 
-      <div className="app-layout">
-        {/* Left Panel: Input & Job Manager */}
-        <div className="left-panel">
-          <div className="input-section">
-            <h2>Create Project</h2>
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Describe your project... (e.g., 'Build a modern blog with React and Tailwind CSS')"
-              rows={6}
-            />
-            <button onClick={handleSubmit} disabled={projectState.status === 'processing'}>
-              {projectState.status === 'processing' ? 'Generating...' : 'Generate'}
-            </button>
-          </div>
-
-          <JobManager jobs={savedJobs} onResumeJob={handleResumeJob} />
-        </div>
-
-        {/* Center Panel: Terminal */}
-        <div className="center-panel">
-          <Terminal
-            logs={projectState.logs}
-            status={projectState.status}
-            progress={projectState.progress}
-          />
-        </div>
-
-        {/* Right Panel: Preview */}
-        <div className="right-panel">
-          <Preview
-            artifacts={projectState.artifacts}
-            status={projectState.status}
-          />
-        </div>
-      </div>
+      {/* Main content */}
+      <main className="studio-main">
+        {activeTab === 'dashboard' && <Dashboard token={token} />}
+        {activeTab === 'ai-chat' && <AIChat token={token} user={user} />}
+        {activeTab === 'create' && <ProjectGenerator token={token} />}
+      </main>
     </div>
   );
 }

@@ -1,0 +1,118 @@
+services:
+  # ============================================
+  # POSTGRESQL DATABASE (internal only - no host exposure)
+  # ============================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: aenewsb-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aenewsb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: aenewsb_builder
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # NO host port exposure - internal Docker network only
+
+    networks:
+      - aenewsb_network
+
+  # ============================================
+  # REDIS (internal only)
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: aenewsb-redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
+    volumes:
+      - redis_data:/data
+    # NO host port exposure - internal Docker network only
+
+    networks:
+      - aenewsb_network
+
+  # ============================================
+  # API GATEWAY
+  # ============================================
+  api:
+    build:
+      context: .
+      dockerfile: ./apps/api/Dockerfile
+    container_name: aenewsb-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://aenewsb:${POSTGRES_PASSWORD}@postgres:5432/aenewsb_builder?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      API_PORT: 3001
+      API_HOST: 0.0.0.0
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:3181:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./secrets:/app/secrets:ro
+
+    networks:
+      - aenewsb_network
+
+  # ============================================
+  # FRONTEND STUDIO (nginx:alpine serving static)
+  # ============================================
+  studio:
+    build:
+      context: .
+      dockerfile: ./apps/studio/Dockerfile
+    container_name: aenewsb-studio
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    ports:
+      - "127.0.0.1:3180:5173"
+    depends_on:
+      api:
+        condition: service_started
+    networks:
+      - aenewsb_network
+
+  # ============================================
+  # ADMIN DASHBOARD
+  # ============================================
+  admin:
+    build:
+      context: .
+      dockerfile: ./apps/admin/Dockerfile
+    container_name: aenewsb-admin
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    ports:
+      - "127.0.0.1:3182:5174"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - aenewsb_network
+
+# ============================================
+# VOLUMES
+# ============================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# ============================================
+# NETWORKS
+# ============================================
+networks:
+  aenewsb_network:
+    driver: bridge

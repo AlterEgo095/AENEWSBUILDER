@@ -236,20 +236,12 @@ export async function adminRoutes(app: FastifyInstance) {
         }
       }
 
-      // Enrich user list with cost
-      const projectIds = users.map((u) => u.id);
-      const projectCostsByUser = await prisma.project.groupBy({
-        by: ['userId'],
-        where: { userId: { in: projectIds } },
-        _sum: { id: true }, // just to have grouping
-      });
-
-      // Build projectId → userId mapping
-      const projectOwnerMap = await prisma.project.findMany({
-        where: { userId: { in: projectIds } },
+      // Map projectId -> userId for cost aggregation
+      const allUserProjects = await prisma.project.findMany({
+        where: { userId: { in: users.map(u => u.id) } },
         select: { id: true, userId: true },
       });
-      const pidToUid = new Map(projectOwnerMap.map((p) => [p.id, p.userId]));
+      const pidToUid = new Map(allUserProjects.map((p) => [p.id, p.userId]));
 
       // Summarise cost per user
       const userTotalCost = new Map<string, number>();

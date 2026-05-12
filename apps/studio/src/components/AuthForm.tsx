@@ -42,10 +42,13 @@ function AuthForm({ onAuthSuccess }: AuthFormProps) {
         throw new Error(data.message || data.error || 'Authentication failed');
       }
 
-      if (data.success && data.token && data.user) {
-        onAuthSuccess(data.token, data.user);
+      // Handle both formats
+      const token = data.token || (data.data && data.data.token)
+      const user = data.user || (data.data && data.data.user)
+      if (data.success && token && user) {
+        onAuthSuccess(token, user);
       } else {
-        throw new Error('Invalid response from server');
+        throw new Error(data.message || data.error || 'Invalid response from server');
       }
     } catch (err: any) {
       setError(err.message || 'An error occurred');

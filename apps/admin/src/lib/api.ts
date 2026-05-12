@@ -90,18 +90,21 @@ class ApiClient {
   }
 
   // ─── Auth ────────────────────────────────────
-  // API returns { success, token, user } but admin expects { success, data: { token, user } }
+  // Login - API returns { success, data: { token, user } }
   async login(email: string, password: string) {
-    const res = await this.post<{ success: boolean; token: string; user: User; error?: string }>('/auth/login', { email, password });
-    if (res.success && res.token) {
+    const res = await this.post<{ success: boolean; data?: { token: string; user: User }; token?: string; user?: User; error?: string; message?: string }>('/auth/login', { email, password });
+    // Handle both response formats: with and without data wrapper
+    const token = res.data?.token || res.token;
+    const user = res.data?.user || res.user;
+    if (res.success && token && user) {
       return {
         success: true,
-        data: { token: res.token, user: res.user },
+        data: { token, user },
       } as ApiResponse<{ token: string; user: User }>;
     }
     return {
       success: false,
-      error: res.error || 'Login failed',
+      error: res.error || res.message || 'Login failed',
     } as ApiResponse<{ token: string; user: User }>;
   }
 
