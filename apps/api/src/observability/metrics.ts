@@ -179,20 +179,9 @@ export const aiCacheMisses = new Counter({
   registers: [metricsRegistry],
 });
 
-export const aiRequests = new Counter({
-  name: 'ai_requests_total',
-  help: 'Total AI requests',
-  labelNames: ['provider', 'model', 'status'],
-  registers: [metricsRegistry],
-});
+export const aiRequests = aiRequestTotal; // alias to avoid duplicate registration
 
-export const aiLatency = new Histogram({
-  name: 'ai_latency_seconds',
-  help: 'AI request latency',
-  labelNames: ['provider'],
-  buckets: [0.5, 1, 2, 5, 10, 20, 30, 60],
-  registers: [metricsRegistry],
-});
+export const aiLatency = aiRequestDuration; // alias to avoid duplicate registration
 
 // Redis Metrics (used by bull-config.ts)
 export const redisConnections = new Gauge({
