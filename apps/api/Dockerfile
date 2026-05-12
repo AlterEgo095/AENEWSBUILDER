@@ -44,6 +44,7 @@ RUN adduser --system --uid 1001 aenews
 COPY --from=builder --chown=aenews:nodejs /app/apps/api/dist ./dist
 COPY --from=builder --chown=aenews:nodejs /app/apps/api/prisma ./prisma
 COPY --from=builder --chown=aenews:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=aenews:nodejs /app/packages/mcp ./packages/mcp
 
 # Create secrets directory
 RUN mkdir -p /app/secrets
