@@ -6,15 +6,18 @@ FROM node:20-alpine AS base
 RUN apk add --no-cache libc6-compat openssl
 
 # ============================================
-# DEPENDENCIES + BUILD STAGE (combined for simplicity)
+# DEPENDENCIES + BUILD STAGE
 # ============================================
 FROM base AS builder
 WORKDIR /app
 
+# Copy all workspace package.json files (monorepo requirement)
 COPY package.json package-lock.json* ./
 COPY apps/api/package.json ./apps/api/
+COPY packages/mcp/package.json ./packages/mcp/ 2>/dev/null || true
 
-RUN npm install 2>/dev/null
+# Install without workspaces (monorepo resolution causes issues in Docker)
+RUN npm install --legacy-peer-deps --ignore-scripts 2>/dev/null
 
 COPY . .
 
