@@ -67,7 +67,7 @@ export interface Step {
 }
 
 export interface DecisionResult {
-  model: 'gpt-4o' | 'gpt-4o-mini' | 'claude-sonnet' | 'claude-opus' | 'qwen-turbo' | 'qwen-plus' | 'qwen-max' | 'qwq-32b' | 'qwen-long';
+  model: 'qwen3-coder-480b' | 'qwen-max' | 'qwen3.6-plus' | 'qwen-turbo' | 'qwen3.6-flash' | 'qwen3-32b' | 'qwen3.5-35b' | 'qwen-vl-max' | 'qwen-plus' | 'qwq-32b' | 'qwen-long' | 'gpt-4o' | 'gpt-4o-mini' | 'claude-sonnet' | 'claude-opus';
   mcpTools: string[];
   estimatedCost: number;
   reasoning: string;
@@ -109,7 +109,7 @@ Return ONLY valid JSON, no explanations.`;
       if (dashscope) {
         try {
           const response = await dashscope.chat.completions.create({
-            model: 'qwen-turbo',
+            model: 'qwen3.6-plus',
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: prompt },
@@ -119,7 +119,7 @@ Return ONLY valid JSON, no explanations.`;
             response_format: { type: 'json_object' },
           });
           content = response.choices[0]?.message?.content || '';
-          usedModel = 'qwen-turbo';
+          usedModel = 'qwen3.6-plus';
         } catch (dsError) {
           logger.warn({ error: dsError }, '⚠️ DashScope classification failed, falling back to OpenAI');
         }
@@ -203,7 +203,7 @@ Return ONLY valid JSON.`;
       if (dashscope) {
         try {
           const response = await dashscope.chat.completions.create({
-            model: 'qwen-plus',
+            model: 'qwen-max',
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: userMessage },
@@ -212,7 +212,7 @@ Return ONLY valid JSON.`;
             max_tokens: 4000,
           });
           content = response.choices[0]?.message?.content || '';
-          usedModel = 'qwen-plus';
+          usedModel = 'qwen-max';
         } catch (dsError) {
           logger.warn({ error: dsError }, '⚠️ DashScope planning failed, falling back to Anthropic');
         }
@@ -258,43 +258,64 @@ Return ONLY valid JSON.`;
 }
 
 // ============================================
-// 🧠 DECISION ENGINE
+// 🧠 MULTI-MODEL DECISION ENGINE (8 Specialized Models)
 // ============================================
 
 export class DecisionEngine {
   /**
-   * Decide which model to use for generation
+   * Multi-model decision: each model has a specialized role
+   * 
+   * ROLES:
+   * 1. qwen3-coder-480b → PRIMARY CODE GENERATOR (480B params, code-specialized)
+   * 2. qwen-max → ARCHITECT (best reasoning for complex files)
+   * 3. qwen3.6-plus → REVIEWER + CLASSIFIER (smart, fast)
+   * 4. QWEN-turbo → SIMPLE FILES (config, styles, tiny components)
+   * 5. qwen3.6-flash → AUTO-HEALING first pass (ultra fast)
+   * 6. qwen3-32b → CONTEXT SUMMARIZER (mid-size, good compression)
+   * 7. qwen-vl-max → VISUAL DESIGN (Figma screenshots → code)
+   * 8. qwen3.5-35b → BACKUP GENERATOR (MoE 35B, solid mid-tier)
    */
   decide(classification: ProjectClassification, fileSpec: FileSpec): DecisionResult {
-    let model: DecisionResult['model'] = 'qwen-turbo';
-    let estimatedCost = 0.0003;
+    let model: DecisionResult['model'] = 'qwen3-coder-480b';
+    let estimatedCost = 0.002;
     let reasoning = '';
 
-    // Decision logic based on complexity and file type
-    // DashScope models are preferred (cheaper, same quality)
-    if (classification.complexity === 'complex' && fileSpec.type === 'api') {
-      model = 'qwen-max';
-      estimatedCost = 0.004;
-      reasoning = 'Complex API uses Qwen-Max (DashScope advanced)';
-    } else if (classification.complexity === 'complex') {
-      model = 'qwq-32b';
+    // ── Code generation routing ─────────────────────────────────
+    // PRIMARY: qwen3-coder-480b for ALL code files (480B params!)
+    if (fileSpec.type === 'component' || fileSpec.type === 'page') {
+      // React/Vue components and pages → use the beast
+      model = 'qwen3-coder-480b';
       estimatedCost = 0.002;
-      reasoning = 'Complex logic uses QwQ-32B reasoning model (DashScope)';
-    } else if (classification.complexity === 'medium') {
-      model = 'qwen-plus';
-      estimatedCost = 0.001;
-      reasoning = 'Medium complexity uses Qwen-Plus (DashScope standard)';
+      reasoning = 'Component/Page → qwen3-coder-480b (480B code-specialized)';
+    } else if (fileSpec.type === 'api') {
+      if (classification.complexity === 'complex') {
+        // Complex API → best reasoning model
+        model = 'qwen-max';
+        estimatedCost = 0.004;
+        reasoning = 'Complex API → qwen-max (best reasoning)';
+      } else {
+        model = 'qwen3-coder-480b';
+        estimatedCost = 0.002;
+        reasoning = 'Standard API → qwen3-coder-480b (code-specialized)';
+      }
     } else if (fileSpec.type === 'config' || fileSpec.type === 'style') {
+      // Config/style → fastest cheapest
       model = 'qwen-turbo';
       estimatedCost = 0.0003;
-      reasoning = 'Simple config/style uses Qwen-Turbo (DashScope fast)';
+      reasoning = 'Config/Style → qwen-turbo (fastest)';
+    } else if (classification.complexity === 'complex') {
+      // Complex other files → qwen-max for reasoning
+      model = 'qwen-max';
+      estimatedCost = 0.004;
+      reasoning = 'Complex file → qwen-max (advanced reasoning)';
     } else {
-      model = 'qwen3-235b-a22b';
-      estimatedCost = 0.001;
-      reasoning = 'Standard generation uses Qwen3-235B (DashScope)';
+      // Default → 480B code model
+      model = 'qwen3-coder-480b';
+      estimatedCost = 0.002;
+      reasoning = 'Standard → qwen3-coder-480b (code-specialized)';
     }
 
-    // Select MCP tools based on features
+    // ── MCP tool selection ──────────────────────────────────────
     const mcpTools: string[] = [];
     if (classification.features.includes('design') || classification.features.includes('figma')) {
       mcpTools.push('figma');
@@ -305,13 +326,27 @@ export class DecisionEngine {
     if (classification.features.includes('deploy')) {
       mcpTools.push('cloudflare');
     }
+    if (classification.features.includes('database') || classification.features.includes('supabase')) {
+      mcpTools.push('supabase');
+    }
 
-    return {
-      model,
-      mcpTools,
-      estimatedCost,
-      reasoning,
+    return { model, mcpTools, estimatedCost, reasoning };
+  }
+
+  /**
+   * Get the model for a specific ROLE (used by other workers)
+   */
+  getRoleModel(role: 'classifier' | 'planner' | 'generator' | 'reviewer' | 'healer' | 'summarizer' | 'visual'): string {
+    const roleModelMap: Record<string, string> = {
+      classifier: 'qwen3.6-plus',     // Smart + fast for classification
+      planner: 'qwen-max',            // Best reasoning for architecture
+      generator: 'qwen3-coder-480b',  // 480B code-specialized monster
+      reviewer: 'qwen3.6-plus',       // Smart reviewer
+      healer: 'qwen3.6-flash',        // Ultra fast first-pass healing
+      summarizer: 'qwen3-32b',        // Good compression for context
+      visual: 'qwen-vl-max',          // Vision model for design
     };
+    return roleModelMap[role] || 'qwen3.6-plus';
   }
 }
 

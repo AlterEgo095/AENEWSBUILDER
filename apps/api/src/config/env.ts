@@ -75,7 +75,7 @@ const envSchema = z.object({
   OTEL_SERVICE_NAME: z.string().optional().default('aenews-api'),
   
   // Cost Management
-  MAX_TOKENS_PER_REQUEST: z.string().transform(Number).default('8000'),
+  MAX_TOKENS_PER_REQUEST: z.string().transform(Number).default('16384'),
   COST_ALERT_THRESHOLD_DAILY: z.string().transform(Number).default('10'),
 });
 

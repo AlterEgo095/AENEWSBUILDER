@@ -58,6 +58,8 @@ if (config.dashscope.enabled && config.dashscope.apiKey) {
 let rotationCounters: Record<string, number> = {
   'qwen-turbo': 0, 'qwen-plus': 0, 'qwen-max': 0,
   'qwq-32b': 0, 'qwen3-235b-a22b': 0, 'qwen-long': 0,
+  'qwen3-coder-480b': 0, 'qwen3.6-plus': 0, 'qwen3.6-flash': 0,
+  'qwen3-32b': 0, 'qwen3.5-35b': 0, 'qwen-vl-max': 0,
 };
 
 /**
@@ -84,7 +86,7 @@ function rotateModel(model: string): string {
 
 export class Generator {
   /** Max tokens for the dependency context window (keep prompt focused) */
-  private readonly CONTEXT_TOKEN_BUDGET = 4000;
+  private readonly CONTEXT_TOKEN_BUDGET = 24000;
 
   /**
    * Generate a single file with full context awareness.
@@ -152,15 +154,20 @@ export class Generator {
    */
   private buildSystemPrompt(context: GenerationContext): string {
     const parts: string[] = [
-      'You are an expert software engineer working on the AENEWS BUILDER platform.',
-      'You generate production-ready code that is clean, well-typed, and follows modern best practices.',
+      'You are a WORLD-CLASS senior software engineer with 15+ years of experience.',
+      'You generate PRODUCTION-READY, PREMIUM code that is:',
+      '  - Clean, well-typed, and follows modern best practices',
+      '  - Properly structured with clear separation of concerns',
+      '  - Responsive and accessible (mobile-first design)',
+      '  - Performant with optimized rendering and data fetching',
+      '  - Secure with proper input validation and error handling',
     ];
 
     // Add project classification context
     if (context.classification) {
       const cls = context.classification;
       parts.push(
-        `\n## Project Context`,
+        '\n## Project Context',
         `- Project type: ${cls.type || 'unknown'}`,
         `- Complexity: ${cls.complexity || 'medium'}`,
         `- Features: ${(cls.features || []).join(', ')}`,
@@ -171,19 +178,29 @@ export class Generator {
     // Add tech stack context
     if (context.techStack && context.techStack.length > 0) {
       parts.push(
-        `\n## Tech Stack`,
+        '\n## Tech Stack',
         `Use these technologies: ${context.techStack.join(', ')}`,
-        'Match the coding style and conventions of these technologies.'
+        'Follow the idiomatic patterns and conventions of each technology.'
       );
     }
 
     parts.push(
-      '\n## Rules',
+      '\n## Code Quality Standards',
+      '- Use TypeScript with STRICT types (never use `any` unless absolutely unavoidable)',
+      '- Use proper async/await with try/catch for all async operations',
+      '- Add JSDoc comments for exported functions and complex logic',
+      '- Use ES2024+ syntax (optional chaining, nullish coalescing, etc.)',
+      '- Follow the single responsibility principle — one export per file',
+      '- Use meaningful variable and function names (no abbreviations)',
+      '- Handle edge cases and validate all external inputs',
+      '- Use CSS-in-JS or Tailwind CSS for styling (no separate .css files unless necessary)',
+      '- Ensure responsive design with mobile-first approach',
+      '- Add proper loading, error, and empty states for UI components',
+      '- Use named exports; default export only for page-level components',
+      '\n## Output',
       '- Return ONLY the file content. No explanations, no markdown headers.',
-      '- Use TypeScript with proper types (no `any` unless absolutely necessary).',
-      '- Include proper error handling for async operations.',
-      '- Add brief comments for complex logic only.',
-      '- Export components/functions as named exports unless a default export is idiomatic.'
+      '- Do NOT wrap in ```code blocks.',
+      '- Ensure the code is complete and ready to run.'
     );
 
     return parts.join('\n');
@@ -407,6 +424,9 @@ export class Generator {
       throw new Error('DashScope client not initialized');
     }
 
+    // Use higher token limit for code-specialized models
+    const maxTokens = model.includes('coder-480b') ? 16384 : config.cost.maxTokensPerRequest;
+
     const response = await dashscope.chat.completions.create({
       model: model,
       messages: [
@@ -414,7 +434,7 @@ export class Generator {
         { role: 'user', content: userPrompt },
       ],
       temperature: 0.2,
-      max_tokens: config.cost.maxTokensPerRequest,
+      max_tokens: maxTokens,
     });
 
     return response.choices[0]?.message?.content || '';
