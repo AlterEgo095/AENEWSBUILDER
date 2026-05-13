@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  DollarSign, TrendingUp, TrendingDown, ArrowUpDown, Download,
+  DollarSign,
   Loader2,
 } from 'lucide-react';
 import api from '@/lib/api';
@@ -149,12 +149,11 @@ function HorizontalBarChart({ data, height = 240 }: {
 
 // ─── Summary Card ────────────────────────────────────────────────────────────
 
-function SummaryCard({ icon: Icon, label, value, subValue, trend, color }: {
+function SummaryCard({ icon: Icon, label, value, subValue, color }: {
   icon: React.ElementType;
   label: string;
   value: string;
   subValue?: string;
-  trend?: number;
   color: string;
 }) {
   const colorClasses: Record<string, { bg: string; text: string; icon: string }> = {

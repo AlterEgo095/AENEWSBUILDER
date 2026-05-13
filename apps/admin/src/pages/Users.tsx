@@ -1,19 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, MoreVertical, Shield, UserX, TrendingUp, Users, RefreshCw, Loader2 } from 'lucide-react';
+import { Search, Shield, UserX, TrendingUp, Users, RefreshCw, Loader2 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { Badge } from '@/components/ui/Badge';
 import { Table, type TableColumn } from '@/components/ui/Table';
 import { StatsCard } from '@/components/ui/StatsCard';
 import type { User } from '@/types';
 import api from '@/lib/api';
-
-const roleVariant: Record<string, 'info' | 'neutral' | 'danger'> = {
-  admin: 'info',
-  user: 'neutral',
-  moderator: 'info',
-  banned: 'danger',
-};
 
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
@@ -28,35 +20,32 @@ export default function UsersPage() {
   // Debounced search + page fetch (stable via useRef to avoid stale closure)
   const searchRef = useRef(search);
   searchRef.current = search;
+  const pageRef = useRef(page);
+  pageRef.current = page;
+
+  const fetchUsers = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.getUsers(pageRef.current, limit, searchRef.current || undefined);
+      setUsers(res.data || []);
+      setTotalUsers(res.pagination?.total || 0);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load users');
+    } finally {
+      setLoading(false);
+    }
+  }, [limit]);
 
   useEffect(() => {
     setPage(1);
   }, [search, roleFilter]);
 
+  // Debounced fetch on search/page/filter change
   useEffect(() => {
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await api.getUsers(page, limit, searchRef.current || undefined);
-        if (!cancelled) {
-          setUsers(res.data || []);
-          setTotalUsers(res.pagination?.total || 0);
-        }
-      } catch (err: any) {
-        if (!cancelled) {
-          setError(err?.message || 'Failed to load users');
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }, 300);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [page, search, roleFilter]);
+    const timer = setTimeout(fetchUsers, 300);
+    return () => clearTimeout(timer);
+  }, [page, search, roleFilter, fetchUsers]);
 
   // Filter by role on client side since backend doesn't support role filter yet
   const filteredUsers = roleFilter

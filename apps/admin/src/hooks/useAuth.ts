@@ -9,15 +9,6 @@ interface AuthState {
   loading: boolean;
 }
 
-/**
- * Auth response from /auth/verify endpoint
- * Shape: { valid: boolean; user?: { id, email, name, role, createdAt } }
- */
-interface VerifyResponse {
-  valid: boolean;
-  user?: User;
-}
-
 export function useAuth() {
   const [state, setState] = useState<AuthState>({
     user: null,

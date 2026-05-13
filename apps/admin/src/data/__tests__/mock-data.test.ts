@@ -11,7 +11,6 @@ import {
   mockDailyCosts,
   mockCostByCategory,
   mockCostByModel,
-  mockCostByUser,
   mockQueueStats,
   mockSettings,
 } from '../mock-data';

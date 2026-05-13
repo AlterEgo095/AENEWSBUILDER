@@ -1,60 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Activity, Server, Database, HardDrive, Clock, CheckCircle2,
-  AlertTriangle, XCircle, Info, RefreshCw, Cpu, Zap, Timer,
+  Activity, Server, Database, HardDrive, Clock,
+  RefreshCw, Zap,
 } from 'lucide-react';
 import api from '@/lib/api';
-
-// ─── Mini Area Chart (SVG) ───────────────────────────────────────────────────
-
-function MiniAreaChart({ data, color = '#3b82f6', height = 60, label, value, unit }: {
-  data: { time: string; value: number }[];
-  color?: string;
-  height?: number;
-  label?: string;
-  value?: number;
-  unit?: string;
-}) {
-  if (data.length < 2) return null;
-  const values = data.map((d) => d.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min || 1;
-  const w = 300;
-  const h = height;
-  const points = values.map((v, i) => ({
-    x: (i / (values.length - 1)) * w,
-    y: h - ((v - min) / range) * (h - 4) - 2,
-  }));
-  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-  const areaPath = `${linePath} L ${w} ${h} L 0 ${h} Z`;
-
-  return (
-    <div>
-      {label && (
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-medium text-white">{label}</h3>
-          </div>
-          <div className="text-right">
-            <span className="text-lg font-bold text-white">{value != null ? value.toFixed(1) : '-'}</span>
-            {unit && <span className="text-xs text-gray-500 ml-1">{unit}</span>}
-          </div>
-        </div>
-      )}
-      <svg viewBox={`0 0 ${w} ${h}`} className="w-full" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id={`grad-${color.replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.3" />
-            <stop offset="100%" stopColor={color} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <path d={areaPath} fill={`url(#grad-${color.replace('#', '')})`} />
-        <path d={linePath} fill="none" stroke={color} strokeWidth="1.5" />
-      </svg>
-    </div>
-  );
-}
 
 // ─── Health Card ─────────────────────────────────────────────────────────────
 

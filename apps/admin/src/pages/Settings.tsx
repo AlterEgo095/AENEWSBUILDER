@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Settings, Globe, Zap,
-  Save, Eye, EyeOff, Check, Info, Loader2,
+  Globe, Zap,
+  Save, Check, Info, Loader2,
 } from 'lucide-react';
 import api from '@/lib/api';
 

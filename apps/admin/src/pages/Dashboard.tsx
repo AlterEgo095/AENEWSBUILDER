@@ -1,4 +1,4 @@
-import { Users, FolderKanban, Activity, CheckCircle, Clock, AlertTriangle } from 'lucide-react';
+import { Users, FolderKanban, Activity, CheckCircle, AlertTriangle } from 'lucide-react';
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card';
 import { StatsCard } from '@/components/ui/StatsCard';
 import { Badge } from '@/components/ui/Badge';

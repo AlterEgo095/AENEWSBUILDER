@@ -68,7 +68,7 @@ export function useApi<T>(
   };
 }
 
-export function usePostApi<TReq, TRes>() {
+export function usePostApi<TRes>() {
   const [state, setState] = useState<UseApiState<TRes>>({
     data: null,
     loading: false,

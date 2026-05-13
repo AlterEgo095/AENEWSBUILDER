@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plug, ToggleLeft, ToggleRight, Search, RefreshCw, Loader2, Settings2 } from 'lucide-react';
-import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import api from '@/lib/api';
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, Trash2, Loader2, ListTodo } from 'lucide-react';
-import { Card, CardHeader, CardTitle } from '@/components/ui/Card';
+import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Table, type TableColumn } from '@/components/ui/Table';

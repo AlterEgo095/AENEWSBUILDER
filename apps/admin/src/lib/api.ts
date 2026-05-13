@@ -1,13 +1,7 @@
 import type {
   ApiResponse,
-  DashboardMetrics,
   User,
-  Project,
-  Job,
   SystemHealth,
-  CostRecord,
-  MCPToolInfo,
-  QueueStats,
   PaginatedResponse,
 } from '@/types';
 

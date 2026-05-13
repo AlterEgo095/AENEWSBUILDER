@@ -1,1 +1,30 @@
-{\n  "env": {\n    "browser": true,\n    "es2021": true\n  },\n  "extends": [\n    "eslint:recommended",\n    "plugin:@typescript-eslint/recommended"\n  ],\n  "parser": "@typescript-eslint/parser",\n  "parserOptions": {\n    "ecmaVersion": 12,\n    "sourceType": "module"\n  },\n  "plugins": [\n    "@typescript-eslint"\n  ],\n  "rules": {\n    "quotes": [\n      "error",\n      "single"\n    ],\n    "semi": [\n      "error",\n      "always"\n    ],\n    "@typescript-eslint/no-explicit-any": "warn",\n    "@typescript-eslint/explicit-module-boundary-types": "off"\n  }\n}
+{
+  "env": {
+    "browser": true,
+    "es2021": true
+  },
+  "extends": [
+    "eslint:recommended",
+    "plugin:@typescript-eslint/recommended"
+  ],
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "ecmaVersion": 12,
+    "sourceType": "module"
+  },
+  "plugins": [
+    "@typescript-eslint"
+  ],
+  "rules": {
+    "quotes": [
+      "error",
+      "single"
+    ],
+    "semi": [
+      "error",
+      "always"
+    ],
+    "@typescript-eslint/no-explicit-any": "warn",
+    "@typescript-eslint/explicit-module-boundary-types": "off"
+  }
+}

@@ -49,7 +49,6 @@ export default function ProjectDetail() {
   }
 
   const totalCost = project.stats?.totalCost || project.cost || project.totalCost || 0;
-  const progress = project.progress ?? 0;
   const isCompleted = state === 'DONE';
   const createdAt = project.createdAt;
 

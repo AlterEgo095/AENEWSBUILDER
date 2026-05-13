@@ -41,7 +41,7 @@ function useApiInline<T>(fetcher: () => Promise<T>, options: any = {}) {
   return { ...state, refetch };
 }
 
-function usePostApiInline<TReq, TRes>() {
+function usePostApiInline<TRes>() {
   const [state, setState] = useState({ data: null as TRes | null, loading: false, error: null as string | null });
   const execute = useCallback(async (request: () => Promise<TRes>) => {
     setState(prev => ({ ...prev, loading: true, error: null }));
@@ -146,7 +146,7 @@ describe('usePostApi', () => {
 
   it('execute works', async () => {
     const r = vi.fn().mockResolvedValue({ id: 'new' });
-    const { result } = renderHook(() => usePostApiInline<any, any>());
+    const { result } = renderHook(() => usePostApiInline<any>());
     expect(result.current.loading).toBe(false);
     await act(async () => { await result.current.execute(() => r()); });
     await waitFor(() => { expect(result.current.data).toEqual({ id: 'new' }); });
@@ -154,7 +154,7 @@ describe('usePostApi', () => {
 
   it('reset clears state', async () => {
     const r = vi.fn().mockResolvedValue({ id: '1' });
-    const { result } = renderHook(() => usePostApiInline<any, any>());
+    const { result } = renderHook(() => usePostApiInline<any>());
     await act(async () => { await result.current.execute(() => r()); });
     await waitFor(() => { expect(result.current.data).toEqual({ id: '1' }); });
     act(() => { result.current.reset(); });
