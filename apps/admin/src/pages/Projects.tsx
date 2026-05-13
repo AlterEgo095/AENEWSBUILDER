@@ -6,20 +6,11 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Table, type TableColumn } from '@/components/ui/Table';
 import api from '@/lib/api';
+import { PROJECT_STATE_VARIANT, PROJECT_STATE_LABEL } from '@/types';
 
-const stateVariant: Record<string, 'warning' | 'info' | 'success' | 'danger'> = {
-  PENDING: 'warning',
-  PROCESSING: 'info',
-  DONE: 'success',
-  FAILED: 'danger',
-};
+const stateVariant = { ...PROJECT_STATE_VARIANT };
 
-const stateLabel: Record<string, string> = {
-  PENDING: 'Pending',
-  PROCESSING: 'Processing',
-  DONE: 'Completed',
-  FAILED: 'Failed',
-};
+const stateLabel = { ...PROJECT_STATE_LABEL };
 
 export default function Projects() {
   const navigate = useNavigate();

@@ -232,8 +232,7 @@ export default function CostsPage() {
   const categoryColors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
 
   return (
-    <div className="min-h-screen bg-[#0A0B0E]">
-      <div className="p-6 max-w-[1600px] mx-auto">
+    <div className="max-w-[1600px]">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
@@ -306,7 +305,6 @@ export default function CostsPage() {
             <div className="flex items-center justify-center h-32 text-zinc-500 text-sm">No model cost data</div>
           )}
         </div>
-      </div>
     </div>
   );
 }

@@ -134,8 +134,8 @@ class ApiClient {
   }
 
   async getProject(id: string) {
-    // Backend returns project object directly
-    return this.get<any>(`/admin/projects/${id}`);
+    // Backend returns project object directly (not wrapped)
+    return this.get<Record<string, any>>(`/admin/projects/${id}`);
   }
 
   async deleteProject(id: string) {
@@ -199,12 +199,13 @@ class ApiClient {
   }
 
   // ─── Settings ────────────────────────────────
+  // Backend returns { settings: {...}, source, key } directly
   async getSettings() {
-    return this.get<ApiResponse<Record<string, unknown>>>('/admin/settings');
+    return this.get<{ settings: Record<string, string>; source: string; key: string }>('/admin/settings');
   }
 
-  async updateSettings(data: Record<string, unknown>) {
-    return this.put<ApiResponse<Record<string, unknown>>>('/admin/settings', data);
+  async updateSettings(data: Record<string, string>) {
+    return this.put<{ success: boolean; updated: string[]; rejected: string[]; message: string }>('/admin/settings', data);
   }
 }
 

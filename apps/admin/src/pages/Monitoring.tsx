@@ -176,8 +176,7 @@ export default function MonitoringPage() {
   const overview = metrics?.overview || {};
 
   return (
-    <div className="min-h-screen bg-[#0A0B0E]">
-      <div className="p-6 max-w-[1600px] mx-auto">
+    <div className="max-w-[1600px]">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div className="flex items-center gap-3">
@@ -301,7 +300,6 @@ export default function MonitoringPage() {
           .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
           .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
         `}</style>
-      </div>
     </div>
   );
 }

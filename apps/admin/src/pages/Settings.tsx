@@ -1,9 +1,23 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Settings, Globe, Brain, Shield, Wrench, Zap, Bell,
-  Save, RotateCcw, Eye, EyeOff, Check, Info, Loader2,
+  Settings, Globe, Zap,
+  Save, Eye, EyeOff, Check, Info, Loader2,
 } from 'lucide-react';
 import api from '@/lib/api';
+
+// ─── Allowed setting keys (must match backend DEFAULT_SETTINGS) ──────────────
+const ALLOWED_KEYS = new Set([
+  'maxProjectsPerUser',
+  'maxDailyCost',
+  'sandboxPoolSize',
+  'workerConcurrency',
+  'autoHealingEnabled',
+  'mcpToolsEnabled',
+  'registrationEnabled',
+  'maintenanceMode',
+  'allowedOrigins',
+  'costAlertEmail',
+]);
 
 // ─── Toggle Switch ───────────────────────────────────────────────────────────
 
@@ -13,40 +27,13 @@ function Toggle({ checked, onChange }: {
 }) {
   return (
     <button
+      type="button"
       onClick={() => onChange(!checked)}
       className={`relative rounded-full transition-colors duration-200 cursor-pointer ${checked ? 'bg-blue-500' : 'bg-white/10'}`}
       style={{ width: 40, height: 22 }}
     >
       <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200 ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
     </button>
-  );
-}
-
-// ─── Masked Input ────────────────────────────────────────────────────────────
-
-function MaskedInput({ value, onChange, placeholder }: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-}) {
-  const [visible, setVisible] = useState(false);
-  return (
-    <div className="relative">
-      <input
-        type={visible ? 'text' : 'password'}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 pr-10 text-sm text-white placeholder-gray-600 font-mono focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20"
-      />
-      <button
-        type="button"
-        onClick={() => setVisible(!visible)}
-        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
-      >
-        {visible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-      </button>
-    </div>
   );
 }
 
@@ -87,6 +74,7 @@ function SettingsSection({ title, icon: Icon, description, children, onSave, sav
         <button
           onClick={onSave}
           disabled={saving}
+          type="button"
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-500 to-purple-500 text-xs text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
         >
           {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
@@ -125,10 +113,10 @@ export default function SettingsPage() {
     setError(null);
     try {
       const res = await api.getSettings();
-      // Backend returns settings as flat key-value object from Redis
-      // Handle both { success, data } and direct format
-      const data = res.data || res;
-      setSettings(typeof data === 'object' && !Array.isArray(data) ? { ...data } : {});
+      // Backend returns { settings: {...}, source: "redis", key: "aenews:settings" }
+      if (res && res.settings) {
+        setSettings({ ...res.settings });
+      }
     } catch (err: any) {
       setError(err?.message || 'Failed to load settings');
     } finally {
@@ -138,18 +126,25 @@ export default function SettingsPage() {
 
   useEffect(() => { fetchSettings(); }, [fetchSettings]);
 
-  const saveSettings = async () => {
+  const saveSettings = useCallback(async () => {
     setSaving(true);
     setError(null);
     try {
-      await api.updateSettings(settings);
-      showToast('Settings saved successfully');
+      // Only send allowed keys (strip any extra state)
+      const payload: Record<string, string> = {};
+      for (const [key, value] of Object.entries(settings)) {
+        if (ALLOWED_KEYS.has(key)) {
+          payload[key] = value;
+        }
+      }
+      const res = await api.updateSettings(payload);
+      showToast(res.message || 'Settings saved successfully');
     } catch (err: any) {
       setError(err?.message || 'Failed to save settings');
     } finally {
       setSaving(false);
     }
-  };
+  }, [settings, showToast]);
 
   const updateSetting = (key: string, value: string) => {
     setSettings(prev => ({ ...prev, [key]: value }));
@@ -168,19 +163,8 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0A0B0E]">
-      <style>{`
-        .animate-slide-in { animation: slideIn 0.3s ease-out; }
-        @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-      `}</style>
-
-      <div className="p-6 max-w-[1000px] mx-auto">
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-6">
-          <Settings className="w-6 h-6 text-gray-400" />
-          <h1 className="text-2xl font-bold text-white">Platform Settings</h1>
-        </div>
-
+    <>
+      <div className="max-w-[1000px]">
         {/* Tabs */}
         <div className="flex items-center gap-1 mb-6 overflow-x-auto pb-1">
           {TABS.map((tab) => {
@@ -189,6 +173,7 @@ export default function SettingsPage() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
+                type="button"
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
                   activeTab === tab.id ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'
                 }`}
@@ -339,6 +324,6 @@ export default function SettingsPage() {
       </div>
 
       <Toast message={toast.message} visible={toast.visible} />
-    </div>
+    </>
   );
 }

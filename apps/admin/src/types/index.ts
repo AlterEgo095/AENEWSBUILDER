@@ -2,57 +2,90 @@ export interface User {
   id: string;
   email: string;
   name: string;
-  role: 'admin' | 'user' | 'banned';
+  role: 'admin' | 'user' | 'moderator' | 'banned';
   createdAt: string;
+  updatedAt?: string;
   lastLogin?: string;
-  projectCount: number;
-  totalCost: number;
+  projectCount?: number;
+  totalCost?: number;
 }
+
+export type ProjectState = 'INIT' | 'PENDING' | 'PROCESSING' | 'DONE' | 'FAILED';
+
+/** Maps backend state to display-friendly label */
+export const PROJECT_STATE_LABEL: Record<string, string> = {
+  INIT: 'Pending',
+  PENDING: 'Pending',
+  PROCESSING: 'Processing',
+  DONE: 'Completed',
+  FAILED: 'Failed',
+};
+
+export const PROJECT_STATE_VARIANT: Record<string, 'warning' | 'info' | 'success' | 'danger' | 'neutral'> = {
+  INIT: 'warning',
+  PENDING: 'warning',
+  PROCESSING: 'info',
+  DONE: 'success',
+  FAILED: 'danger',
+};
 
 export interface Project {
   id: string;
-  userId: string;
-  name: string;
-  prompt: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  state: string;
-  progress: number;
-  files: Record<string, string>;
+  userId?: string;
+  name?: string;
+  prompt?: string;
+  state: ProjectState;
+  status?: string;
+  progress?: number;
+  files?: Record<string, string>;
+  context?: Record<string, unknown>;
   deployUrl?: string;
   createdAt: string;
-  updatedAt: string;
-  cost: number;
-  classification?: Record<string, unknown>;
+  updatedAt?: string;
+  cost?: number;
+  totalCost?: number;
+  user?: { id: string; name: string; email: string } | null;
+  eventCount?: number;
+  costRecordCount?: number;
+  fileCount?: number;
 }
 
 export interface Job {
   id: string;
-  projectId: string;
+  name?: string;
+  projectId?: string;
+  projectName?: string;
+  userId?: string;
   state: string;
   progress: number;
-  attempts: number;
-  createdAt: string;
-  processedAt?: string;
-  failedReason?: string;
+  attempts?: number;
+  attemptsMade?: number;
+  timestamp?: string;
+  createdAt?: string;
+  processedOn?: string;
+  finishedOn?: string;
+  failedReason?: string | null;
 }
 
 export interface SystemHealth {
-  api: string;
-  redis: string;
-  database: string;
-  queue: string;
-  uptime: number;
-  memory: {
+  redis?: { status: string; latencyMs?: number };
+  database?: { status: string; latencyMs?: number };
+  api?: string;
+  queue?: string;
+  uptime?: number;
+  memory?: {
     rss: string;
     heapUsed: string;
     heapTotal: string;
   };
+  [key: string]: unknown;
 }
 
 export interface CostRecord {
   date: string;
-  projectCosts: Record<string, number>;
-  totalCost: number;
+  cost: number;
+  tokens?: number;
+  count?: number;
 }
 
 export interface MCPToolInfo {
@@ -87,18 +120,21 @@ export interface ApiResponse<T = unknown> {
   };
 }
 
+/** Actual response shape from GET /admin/metrics */
 export interface DashboardMetrics {
-  totalUsers: number;
-  totalProjects: number;
-  totalRevenue: number;
-  activeJobs: number;
-  successRate: number;
-  avgGenerationTime: number;
+  timestamp?: string;
+  overview: {
+    totalUsers: number;
+    totalProjects: number;
+    completedProjects?: number;
+    failedProjects?: number;
+    successRate: number;
+    activeJobs: number;
+  };
   dailyProjects: Array<{ date: string; count: number }>;
-  dailyRevenue: Array<{ date: string; revenue: number }>;
-  popularFrameworks: Array<{ name: string; count: number }>;
   systemHealth: SystemHealth;
   queueStats: QueueStats;
+  sandboxMetrics?: Record<string, unknown>;
 }
 
 export interface PaginatedResponse<T> {

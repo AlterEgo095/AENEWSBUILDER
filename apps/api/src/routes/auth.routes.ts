@@ -25,10 +25,10 @@ export async function authRoutes(app: FastifyInstance) {
     try {
       const body = registerSchema.parse(request.body);
 
-      // Check if registration is enabled via Redis
+      // Check if registration is enabled via Redis settings hash
       try {
         const redis = getRedis();
-        const registrationEnabled = await redis.get('settings:registrationEnabled');
+        const registrationEnabled = await redis.hget('aenews:settings', 'registrationEnabled');
         if (registrationEnabled === 'false') {
           return reply.status(403).send({
             success: false,
