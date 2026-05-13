@@ -90,22 +90,8 @@ class ApiClient {
   }
 
   // ─── Auth ────────────────────────────────────
-  // Login - API returns { success, data: { token, user } }
   async login(email: string, password: string) {
-    const res = await this.post<{ success: boolean; data?: { token: string; user: User }; token?: string; user?: User; error?: string; message?: string }>('/auth/login', { email, password });
-    // Handle both response formats: with and without data wrapper
-    const token = res.data?.token || res.token;
-    const user = res.data?.user || res.user;
-    if (res.success && token && user) {
-      return {
-        success: true,
-        data: { token, user },
-      } as ApiResponse<{ token: string; user: User }>;
-    }
-    return {
-      success: false,
-      error: res.error || res.message || 'Login failed',
-    } as ApiResponse<{ token: string; user: User }>;
+    return this.post<ApiResponse<{ token: string; user: User }>>('/auth/login', { email, password });
   }
 
   async register(email: string, password: string, name: string) {
@@ -113,20 +99,12 @@ class ApiClient {
   }
 
   async getMe() {
-    // API may return from /auth/me (direct user) or /auth/verify ({valid, user})
-    // Try /auth/me first, fallback to /auth/verify
-    try {
-      const res = await this.get<User>('/auth/me');
-      if (res && 'id' in res) {
-        return { success: true, data: res } as ApiResponse<User>;
-      }
-    } catch {
-      // /auth/me not available, try /auth/verify
-    }
-    const res = await this.get<{ valid: boolean; user?: User }>('/auth/verify');
+    // /auth/verify returns { valid: true, user: { id, email, name, role, createdAt } }
+    const res = await this.get<{ valid: boolean; user: User }>('/auth/verify');
+    // Map to ApiResponse<User> shape expected by the admin app
     return {
-      success: !!res.valid && !!res.user,
-      data: res.user || null,
+      success: res.valid,
+      data: res.user,
     } as ApiResponse<User>;
   }
 
@@ -151,15 +129,17 @@ class ApiClient {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) });
     if (filters?.status) params.set('status', filters.status);
     if (filters?.userId) params.set('userId', filters.userId);
-    return this.get<ApiResponse<PaginatedResponse<Project>>>(`/admin/projects?${params}`);
+    // Backend returns PaginatedResponse directly (not wrapped in ApiResponse)
+    return this.get<PaginatedResponse<any>>(`/admin/projects?${params}`);
   }
 
   async getProject(id: string) {
-    return this.get<ApiResponse<Project>>(`/admin/projects/${id}`);
+    // Backend returns project object directly
+    return this.get<any>(`/admin/projects/${id}`);
   }
 
   async deleteProject(id: string) {
-    return this.delete<ApiResponse<void>>(`/admin/projects/${id}`);
+    return this.delete<any>(`/admin/projects/${id}`);
   }
 
   // ─── Jobs ────────────────────────────────────
@@ -167,16 +147,18 @@ class ApiClient {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) });
     if (filters?.state) params.set('state', filters.state);
     if (filters?.projectId) params.set('projectId', filters.projectId);
-    return this.get<ApiResponse<PaginatedResponse<Job>>>(`/admin/jobs?${params}`);
+    // Backend returns PaginatedResponse directly
+    return this.get<PaginatedResponse<any>>(`/admin/jobs?${params}`);
   }
 
   async retryJob(id: string) {
-    return this.post<ApiResponse<Job>>(`/admin/jobs/${id}/retry`);
+    return this.post<any>(`/admin/jobs/${id}/retry`);
   }
 
   // ─── Dashboard & Metrics ─────────────────────
   async getMetrics() {
-    return this.get<ApiResponse<DashboardMetrics>>('/admin/metrics');
+    // Backend returns { overview, dailyProjects, systemHealth, queueStats } directly
+    return this.get<any>('/admin/metrics');
   }
 
   async getHealth() {
@@ -192,25 +174,28 @@ class ApiClient {
     const params = new URLSearchParams();
     if (from) params.set('from', from);
     if (to) params.set('to', to);
-    return this.get<ApiResponse<CostRecord[]>>(`/admin/costs?${params}`);
+    // Backend returns { period, total, daily, byOperation, byModel } directly
+    return this.get<any>(`/admin/costs?${params}`);
   }
 
   // ─── MCP Tools ───────────────────────────────
   async getMCPTools() {
-    return this.get<ApiResponse<MCPToolInfo[]>>('/admin/mcp/tools');
+    // Backend returns { total, enabled, disabled, categories } directly
+    return this.get<any>('/admin/mcp/tools');
   }
 
   async toggleMCPTool(id: string, enabled: boolean) {
-    return this.put<ApiResponse<MCPToolInfo>>(`/admin/mcp/tools/${id}`, { enabled });
+    return this.put<any>(`/admin/mcp/tools/${id}`, { enabled });
   }
 
   // ─── Queue ───────────────────────────────────
   async getQueueStats() {
-    return this.get<ApiResponse<QueueStats>>('/admin/queue/stats');
+    // Backend returns { timestamp, paused, counts, totalPending } directly
+    return this.get<any>('/admin/queue/stats');
   }
 
   async clearFailedJobs() {
-    return this.post<ApiResponse<void>>('/admin/queue/clear-failed');
+    return this.post<any>('/admin/queue/clear-failed');
   }
 
   // ─── Settings ────────────────────────────────

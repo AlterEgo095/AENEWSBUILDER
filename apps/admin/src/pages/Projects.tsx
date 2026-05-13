@@ -1,78 +1,108 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Filter, MoreVertical, ExternalLink } from 'lucide-react';
-import { Card, CardHeader, CardTitle } from '@/components/ui/Card';
+import { Search, ExternalLink, Trash2, Loader2, FolderKanban } from 'lucide-react';
+import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Table, type TableColumn } from '@/components/ui/Table';
-import type { Project } from '@/types';
+import api from '@/lib/api';
 
-const statusVariant = {
-  pending: 'warning' as const,
-  processing: 'info' as const,
-  completed: 'success' as const,
-  failed: 'danger' as const,
+const stateVariant: Record<string, 'warning' | 'info' | 'success' | 'danger'> = {
+  PENDING: 'warning',
+  PROCESSING: 'info',
+  DONE: 'success',
+  FAILED: 'danger',
 };
 
-const sampleProjects: Project[] = Array.from({ length: 20 }, (_, i) => ({
-  id: `proj-${String(i + 1).padStart(3, '0')}`,
-  userId: `user-${(i % 5) + 1}`,
-  name: [
-    'E-Commerce Store', 'SaaS Dashboard', 'Portfolio Site', 'Blog Platform',
-    'Admin Panel', 'Landing Page', 'API Docs', 'Chat App',
-    'Task Manager', 'Analytics Tool', 'CRM System', 'Social Network',
-    'Learning Platform', 'Job Board', 'Recipe App', 'Weather App',
-    'Music Player', 'File Manager', 'Wiki System', 'Survey Tool',
-  ][i],
-  prompt: 'Build a modern web application...',
-  status: (['completed', 'completed', 'completed', 'processing', 'pending', 'failed'] as const)[i % 6],
-  state: 'DONE',
-  progress: [100, 100, 100, 67, 0, 100][i % 6],
-  files: { 'index.tsx': '...', 'App.tsx': '...' },
-  deployUrl: i % 3 === 0 ? `https://app-${i + 1}.aenews.app` : undefined,
-  createdAt: new Date(Date.now() - i * 86400000 * Math.random() * 10).toISOString(),
-  updatedAt: new Date().toISOString(),
-  cost: Math.round(Math.random() * 5 * 100) / 100,
-}));
+const stateLabel: Record<string, string> = {
+  PENDING: 'Pending',
+  PROCESSING: 'Processing',
+  DONE: 'Completed',
+  FAILED: 'Failed',
+};
 
 export default function Projects() {
   const navigate = useNavigate();
+  const [projects, setProjects] = useState<any[]>([]);
   const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const limit = 20;
 
-  const filtered = sampleProjects.filter(p => {
-    if (search && !p.name.toLowerCase().includes(search.toLowerCase())) return false;
-    if (statusFilter && p.status !== statusFilter) return false;
-    return true;
-  });
+  const fetchProjects = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.getProjects(page, limit, statusFilter ? { status: statusFilter } : undefined);
+      setProjects(res.data || []);
+      setTotal(res.pagination?.total || 0);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load projects');
+    } finally {
+      setLoading(false);
+    }
+  }, [page, statusFilter]);
 
-  const columns: TableColumn<Project>[] = [
+  useEffect(() => { fetchProjects(); }, [fetchProjects]);
+  useEffect(() => { setPage(1); }, [search, statusFilter]);
+
+  const filtered = search
+    ? projects.filter(p => (p.name || '').toLowerCase().includes(search.toLowerCase()))
+    : projects;
+
+  const handleDelete = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm('Delete this project?')) return;
+    try {
+      await api.deleteProject(id);
+      fetchProjects();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to delete project');
+    }
+  };
+
+  const columns: TableColumn<any>[] = [
     {
       key: 'name',
       header: 'Project',
       sortable: true,
       render: (p) => (
         <div>
-          <p className="font-medium text-white">{p.name}</p>
-          <p className="text-xs text-zinc-500 mt-0.5">{p.id}</p>
+          <p className="font-medium text-white">{p.name || 'Untitled'}</p>
+          <p className="text-xs text-zinc-500 mt-0.5 flex items-center gap-2">
+            <span className="font-mono">{p.id?.slice(0, 12)}...</span>
+            {p.user && <span>by {p.user.name}</span>}
+          </p>
         </div>
       ),
     },
     {
-      key: 'status',
+      key: 'state',
       header: 'Status',
       sortable: true,
-      render: (p) => <Badge variant={statusVariant[p.status]}>{p.status}</Badge>,
+      render: (p) => {
+        const v = stateVariant[p.state] || 'neutral' as const;
+        return <Badge variant={v}>{stateLabel[p.state] || p.state}</Badge>;
+      },
     },
     {
-      key: 'cost',
+      key: 'totalCost',
       header: 'Cost',
       sortable: true,
       render: (p) => (
         <span className="text-sm font-medium text-zinc-300">
-          ${p.cost.toFixed(2)}
+          ${(p.totalCost || 0).toFixed(2)}
         </span>
+      ),
+    },
+    {
+      key: 'fileCount',
+      header: 'Files',
+      render: (p) => (
+        <span className="text-sm text-zinc-400">{p.fileCount || 0}</span>
       ),
     },
     {
@@ -88,7 +118,7 @@ export default function Projects() {
     {
       key: 'actions',
       header: '',
-      width: '48px',
+      width: '80px',
       render: (p) => (
         <div className="flex items-center gap-1">
           {p.deployUrl && (
@@ -98,10 +128,18 @@ export default function Projects() {
               rel="noopener noreferrer"
               className="p-1 rounded text-zinc-500 hover:text-brand transition-colors"
               onClick={e => e.stopPropagation()}
+              title="View deployment"
             >
               <ExternalLink size={14} />
             </a>
           )}
+          <button
+            onClick={(e) => handleDelete(p.id, e)}
+            className="p-1 rounded text-zinc-500 hover:text-red-400 transition-colors"
+            title="Delete project"
+          >
+            <Trash2 size={14} />
+          </button>
         </div>
       ),
     },
@@ -122,34 +160,52 @@ export default function Projects() {
           />
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {['', 'completed', 'processing', 'pending', 'failed'].map(status => (
+          {['', 'DONE', 'PROCESSING', 'PENDING', 'FAILED'].map(status => (
             <Button
               key={status}
               variant={statusFilter === status ? 'primary' : 'ghost'}
               size="sm"
               onClick={() => setStatusFilter(status)}
             >
-              {status || 'All'}
+              {status ? stateLabel[status] : 'All'}
             </Button>
           ))}
         </div>
       </div>
 
+      {/* Error */}
+      {error && (
+        <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-400">
+          {error}
+        </div>
+      )}
+
       {/* Table */}
       <Card padding="none">
-        <Table
-          columns={columns}
-          data={filtered}
-          keyExtractor={p => p.id}
-          onRowClick={p => navigate(`/projects/${p.id}`)}
-          pagination={{
-            page,
-            total: filtered.length,
-            limit: 10,
-            onPageChange: setPage,
-          }}
-          emptyMessage="No projects found"
-        />
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 size={24} className="animate-spin text-zinc-500" />
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-zinc-500">
+            <FolderKanban size={32} className="mb-3 opacity-50" />
+            <p className="text-sm">{search ? 'No projects match your search' : 'No projects yet'}</p>
+          </div>
+        ) : (
+          <Table
+            columns={columns}
+            data={filtered}
+            keyExtractor={p => p.id}
+            onRowClick={p => navigate(`/projects/${p.id}`)}
+            pagination={{
+              page,
+              total,
+              limit,
+              onPageChange: setPage,
+            }}
+            emptyMessage="No projects found"
+          />
+        )}
       </Card>
     </div>
   );
