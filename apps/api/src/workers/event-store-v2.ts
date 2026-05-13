@@ -213,25 +213,23 @@ class EventStoreV2 {
   private eventCountCache: Map<string, number> = new Map(); // projectId -> eventCount
 
   constructor() {
-    // Redis connections
-    this.redis = new Redis({
-      host: env.REDIS_HOST,
-      port: env.REDIS_PORT,
-      password: env.REDIS_PASSWORD,
-      maxRetriesPerRequest: null, // Infinite retries
-    });
+    // Redis connections — use REDIS_URL (Docker service name)
+    const redisUrl = new URL(env.REDIS_URL);
+    const redisOpts = {
+      host: redisUrl.hostname,
+      port: parseInt(redisUrl.port || "6379", 10),
+      password: redisUrl.password || env.REDIS_PASSWORD,
+      maxRetriesPerRequest: null as const,
+    };
 
-    this.pubRedis = new Redis({
-      host: env.REDIS_HOST,
-      port: env.REDIS_PORT,
-      password: env.REDIS_PASSWORD,
-    });
+    this.redis = new Redis({ ...redisOpts });
+    this.redis.on("error", () => {}); // Suppress ECONNREFUSED spam
 
-    this.subRedis = new Redis({
-      host: env.REDIS_HOST,
-      port: env.REDIS_PORT,
-      password: env.REDIS_PASSWORD,
-    });
+    this.pubRedis = new Redis({ ...redisOpts });
+    this.pubRedis.on("error", () => {}); // Suppress ECONNREFUSED spam
+
+    this.subRedis = new Redis({ ...redisOpts });
+    this.subRedis.on("error", () => {}); // Suppress ECONNREFUSED spam
 
     this.prisma = new PrismaClient();
     this.emitter = new EventEmitter();
