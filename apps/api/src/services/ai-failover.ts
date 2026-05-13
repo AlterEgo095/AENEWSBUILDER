@@ -165,19 +165,19 @@ export const MODEL_REGISTRY: Record<string, AIModel> = {
     costPer1kTokens: { input: 0.0003, output: 0.0009 },
     tier: 'standard',
   },
-  'qwq-32b': {
+  'qwen3-30b-a3b': {
     provider: AIProvider.DASHSCOPE,
-    name: 'qwq-32b',
+    name: 'qwen3-30b-a3b-instruct-2507',
     maxTokens: 131072,
-    costPer1kTokens: { input: 0.0005, output: 0.0015 },
+    costPer1kTokens: { input: 0.0003, output: 0.0009 },
     tier: 'standard',
   },
-  'qwen-long': {
+  'qwen-coder-plus': {
     provider: AIProvider.DASHSCOPE,
-    name: 'qwen-long',
-    maxTokens: 10000000,
-    costPer1kTokens: { input: 0.00005, output: 0.0002 },
-    tier: 'fast',
+    name: 'qwen-coder-plus',
+    maxTokens: 131072,
+    costPer1kTokens: { input: 0.0004, output: 0.0012 },
+    tier: 'standard',
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -189,6 +189,20 @@ export const MODEL_REGISTRY: Record<string, AIModel> = {
     maxTokens: 131072,
     costPer1kTokens: { input: 0.001, output: 0.003 },
     tier: 'advanced',
+  },
+  'qwen3-coder-plus': {
+    provider: AIProvider.DASHSCOPE,
+    name: 'qwen3-coder-plus',
+    maxTokens: 131072,
+    costPer1kTokens: { input: 0.0005, output: 0.0015 },
+    tier: 'standard',
+  },
+  'qwen3-coder-flash': {
+    provider: AIProvider.DASHSCOPE,
+    name: 'qwen3-coder-flash',
+    maxTokens: 131072,
+    costPer1kTokens: { input: 0.0001, output: 0.0003 },
+    tier: 'fast',
   },
   'qwen3.6-plus': {
     provider: AIProvider.DASHSCOPE,
@@ -218,6 +232,20 @@ export const MODEL_REGISTRY: Record<string, AIModel> = {
     costPer1kTokens: { input: 0.0003, output: 0.0009 },
     tier: 'standard',
   },
+  'qwen3.5-plus': {
+    provider: AIProvider.DASHSCOPE,
+    name: 'qwen3.5-plus',
+    maxTokens: 131072,
+    costPer1kTokens: { input: 0.0004, output: 0.0012 },
+    tier: 'standard',
+  },
+  'qwen3-max': {
+    provider: AIProvider.DASHSCOPE,
+    name: 'qwen3-max',
+    maxTokens: 131072,
+    costPer1kTokens: { input: 0.001, output: 0.003 },
+    tier: 'advanced',
+  },
   'qwen-vl-max': {
     provider: AIProvider.DASHSCOPE,
     name: 'qwen-vl-max-2025-08-13',
@@ -232,10 +260,10 @@ export const MODEL_REGISTRY: Record<string, AIModel> = {
 // ═══════════════════════════════════════════════════════════════
 
 export const MODEL_ROTATION_POOLS: Record<string, string[]> = {
-  fast: ['qwen3.6-flash', 'qwen-turbo', 'qwen-long'],
-  standard: ['qwen3.6-plus', 'qwen3-32b', 'qwen3.5-35b', 'qwen-plus'],
-  advanced: ['qwen3-coder-480b', 'qwen-max', 'qwen-vl-max'],
-  code: ['qwen3-coder-480b', 'qwen3.6-plus', 'qwen-max', 'qwen3-32b'],
+  fast: ['qwen3.6-flash', 'qwen3-coder-flash', 'qwen-turbo'],
+  standard: ['qwen3.6-plus', 'qwen3-coder-plus', 'qwen3-32b', 'qwen3.5-35b', 'qwen3.5-plus', 'qwen-plus'],
+  advanced: ['qwen3-coder-480b', 'qwen3-max', 'qwen-max', 'qwen-vl-max'],
+  code: ['qwen3-coder-480b', 'qwen3-coder-plus', 'qwen3.6-plus', 'qwen3-max', 'qwen-max'],
 };
 
 /** Round-robin rotation state */

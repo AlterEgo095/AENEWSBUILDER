@@ -57,9 +57,11 @@ if (config.dashscope.enabled && config.dashscope.apiKey) {
 // Round-robin model rotation counter
 let rotationCounters: Record<string, number> = {
   'qwen-turbo': 0, 'qwen-plus': 0, 'qwen-max': 0,
-  'qwq-32b': 0, 'qwen3-235b-a22b': 0, 'qwen-long': 0,
-  'qwen3-coder-480b': 0, 'qwen3.6-plus': 0, 'qwen3.6-flash': 0,
-  'qwen3-32b': 0, 'qwen3.5-35b': 0, 'qwen-vl-max': 0,
+  'qwen3-235b-a22b': 0, 'qwen3-30b-a3b': 0,
+  'qwen3-coder-480b': 0, 'qwen3-coder-plus': 0, 'qwen3-coder-flash': 0,
+  'qwen3.6-plus': 0, 'qwen3.6-flash': 0,
+  'qwen3-32b': 0, 'qwen3.5-35b': 0, 'qwen3.5-plus': 0, 'qwen3-max': 0,
+  'qwen-vl-max': 0, 'qwen-coder-plus': 0,
 };
 
 /**
@@ -424,11 +426,16 @@ export class Generator {
       throw new Error('DashScope client not initialized');
     }
 
+    // CRITICAL FIX: Resolve registry key to actual DashScope model name
+    // e.g. 'qwen3-coder-480b' -> 'qwen3-coder-480b-a35b-instruct'
+    const registry = MODEL_REGISTRY[model];
+    const actualModel = registry?.name || model;
+
     // Use higher token limit for code-specialized models
-    const maxTokens = model.includes('coder-480b') ? 16384 : config.cost.maxTokensPerRequest;
+    const maxTokens = actualModel.includes('coder') ? 16384 : config.cost.maxTokensPerRequest;
 
     const response = await dashscope.chat.completions.create({
-      model: model,
+      model: actualModel,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
