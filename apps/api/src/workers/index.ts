@@ -31,6 +31,7 @@ import { MCPExecutor } from './mcp-executor.js';
 import { Deployer } from './deployer.js';
 import { logger } from '../config/logger.js';
 import { config } from '../config/env.js';
+import { prisma } from '../config/prisma.js';
 
 // ============================================
 // 🔹 TYPES
@@ -264,6 +265,23 @@ export class WorkerEngine {
         state: nextState,
         updatedAt: new Date().toISOString(),
       });
+
+      // 🔹 CRITICAL FIX: Persist state to PostgreSQL so the dashboard reflects progress
+      try {
+        await prisma.project.update({
+          where: { id: projectId },
+          data: {
+            state: nextState,
+            updatedAt: new Date(),
+            context: job.data.context || {},
+          },
+        });
+      } catch (dbError: any) {
+        logger.warn(
+          { error: dbError.message, projectId, state: nextState },
+          '⚠️ Failed to persist state to DB (non-fatal)'
+        );
+      }
 
       currentState = nextState;
     }
@@ -739,6 +757,26 @@ export class WorkerEngine {
         },
       });
 
+      // 🔹 Persist deploy URL to PostgreSQL immediately (don't wait for loop to update)
+      try {
+        await prisma.project.update({
+          where: { id: projectId },
+          data: {
+            state: 'DONE',
+            deployUrl: deployInfo.url,
+            updatedAt: new Date(),
+            context: {
+              ...((job.data.context as any) || {}),
+              deployUrl: deployInfo.url,
+              deployInfo,
+            },
+          },
+        });
+        logger.info({ projectId, deployUrl: deployInfo.url }, '📍 DEPLOY: Persisted deploy URL to DB');
+      } catch (dbError: any) {
+        logger.warn({ error: dbError.message, projectId }, '⚠️ Failed to persist deploy URL to DB');
+      }
+
       logger.info(
         {
           projectId,
@@ -809,6 +847,23 @@ export class WorkerEngine {
       updatedAt: new Date().toISOString(),
     });
 
+    // 🔹 CRITICAL FIX: Persist FAILED state to PostgreSQL
+    try {
+      await prisma.project.update({
+        where: { id: job.data.projectId },
+        data: {
+          state: 'FAILED',
+          updatedAt: new Date(),
+          context: job.data.context || {},
+        },
+      });
+    } catch (dbError: any) {
+      logger.warn(
+        { error: dbError.message, projectId: job.data.projectId },
+        '⚠️ Failed to persist FAILED state to DB (non-fatal)'
+      );
+    }
+
     await sm.transition('FAILED', 'error_occurred', { error: errorStr });
 
     if (isFatalError) {
@@ -836,9 +891,13 @@ export async function initWorker(): Promise<void> {
   const redis = getRedis();
   const engine = new WorkerEngine();
 
-  // Create Queue
+  // Create Queue with retention policy so completed/failed jobs remain visible
   projectQueue = new Queue<ProjectJob>('projects', {
     connection: redis,
+    defaultJobOptions: {
+      removeOnComplete: { age: 24 * 3600, count: 500 },   // Keep 24h / 500 jobs
+      removeOnFail: { age: 7 * 24 * 3600, count: 1000 }, // Keep 7 days / 1000 jobs
+    },
   });
 
   // Create Worker

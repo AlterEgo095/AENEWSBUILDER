@@ -634,6 +634,64 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   // ──────────────────────────────────────────────────────────────────────────
+  // 🔁 PROJECT RE-PROCESSING (for stuck projects)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * POST /admin/projects/:id/reprocess
+   * Re-enqueue a stuck project (e.g. stuck in INIT or FAILED) into the BullMQ
+   * workflow pipeline for a fresh run.
+   */
+  app.post('/projects/:id/reprocess', {
+    onRequest: [(app as any).authenticate],
+    preHandler: [(app as any).authorizeAdmin],
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+
+      const project = await prisma.project.findUnique({ where: { id } });
+      if (!project) {
+        return reply.status(404).send({ error: 'Project not found' });
+      }
+
+      // Reset project state to INIT
+      await prisma.project.update({
+        where: { id },
+        data: {
+          state: 'INIT',
+          updatedAt: new Date(),
+        },
+      });
+
+      // Re-enqueue into BullMQ
+      const job: ProjectJob = {
+        projectId: id,
+        userId: project.userId,
+        prompt: project.prompt,
+        state: 'INIT',
+        context: {},
+        retryCount: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const queue = getProjectQueue();
+      await queue.add(id, job);
+
+      logger.info({ projectId: id, previousState: project.state }, 'Admin reprocessed project');
+
+      return reply.send({
+        success: true,
+        projectId: id,
+        message: `Project re-enqueued for processing (was: ${project.state})`,
+      });
+    } catch (error: any) {
+      logger.error({ error, projectId: (request.params as any).id }, 'Admin reprocess project failed');
+      return reply.status(500).send({ error: 'Failed to reprocess project', message: error.message });
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
   // 🔄 JOB MANAGEMENT (BullMQ)
   // ──────────────────────────────────────────────────────────────────────────
 
