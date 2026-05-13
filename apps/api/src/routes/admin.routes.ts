@@ -13,6 +13,7 @@ import type { Job } from 'bullmq';
 import { prisma } from '../config/prisma.js';
 import { getRedis } from '../services/redis.service.js';
 import { logger } from '../config/logger.js';
+import rateLimit from '@fastify/rate-limit';
 import { getProjectQueue } from '../workers/index.js';
 import type { ProjectJob } from '../workers/index.js';
 import { eventStoreV2 } from '../workers/event-store-v2.js';
@@ -63,6 +64,21 @@ function paginatedResponse<T>(items: T[], total: number, page: number, limit: nu
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export async function adminRoutes(app: FastifyInstance) {
+  // Admin-specific rate limiting (30 req/min, stricter than global 100/min)
+  await app.register(rateLimit, {
+    name: 'admin-rate-limit',
+    max: 30,
+    timeWindow: 60000,
+    redis: await getRedis(),
+    skipOnError: true,
+    errorResponseBuilder: (req, context) => ({
+      statusCode: 429,
+      error: 'Too many requests',
+      message: 'Admin rate limit exceeded.',
+      retryAfter: context.after,
+    }),
+  });
+
 
   // ──────────────────────────────────────────────────────────────────────────
   // 📊 DASHBOARD METRICS
