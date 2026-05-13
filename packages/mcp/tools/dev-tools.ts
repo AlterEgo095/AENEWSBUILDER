@@ -6,13 +6,28 @@
  * All CLI calls use child_process with timeout and safety checks.
  */
 
-import { exec } from 'child_process';
+import { exec, execFileSync } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
 
 const execAsync = promisify(exec);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Input Validation Helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Validate a find/grep pattern to prevent command injection */
+function validateSearchPattern(pattern: string): void {
+  const dangerous = /[;|`$\n]/;
+  if (dangerous.test(pattern)) {
+    throw new Error('Pattern contains forbidden characters: ; | ` $ or newline');
+  }
+  if (pattern.includes('-exec')) {
+    throw new Error('Pattern contains forbidden flag: -exec');
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Code Execution Sandbox
@@ -357,8 +372,9 @@ export class FileSystemAdapter {
   /** Search for files matching a glob-like pattern */
   async search(dirPath: string, pattern: string): Promise<string[]> {
     try {
+      validateSearchPattern(pattern);
       const resolved = this.resolve(dirPath);
-      const { stdout } = await execAsync(`find ${resolved} -name "${pattern}" -type f 2>/dev/null`, { timeout: 15000 });
+      const stdout = execFileSync('find', [resolved, '-name', pattern, '-type', 'f'], { encoding: 'utf-8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'] });
       return stdout.split('\n').filter(Boolean);
     } catch (error: any) {
       return [];
@@ -645,7 +661,8 @@ export class DesktopCommanderAdapter {
   /** Search for files by name pattern */
   async searchFiles(dir: string, pattern: string): Promise<string[]> {
     try {
-      const { stdout } = await execAsync(`find ${dir} -name "${pattern}" -type f 2>/dev/null`, { timeout: 15000 });
+      validateSearchPattern(pattern);
+      const stdout = execFileSync('find', [dir, '-name', pattern, '-type', 'f'], { encoding: 'utf-8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'] });
       return stdout.split('\n').filter(Boolean);
     } catch (error: any) {
       return [];

@@ -29,7 +29,10 @@ export class ErrorBoundary extends React.Component<Props, State> {
   };
 
   private handleClearData = () => {
-    localStorage.clear();
+    localStorage.removeItem('admin_token');
+    localStorage.removeItem('admin_user');
+    sessionStorage.removeItem('admin_token');
+    sessionStorage.removeItem('admin_user');
     window.location.reload();
   };
 

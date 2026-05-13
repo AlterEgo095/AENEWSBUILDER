@@ -170,7 +170,7 @@ describe('Error Handler Middleware', () => {
       expect(mockReply.status).toHaveBeenCalledWith(429);
       expect(mockReply.send).toHaveBeenCalledWith(
         expect.objectContaining({
-          error: 'Too Many Requests',
+          error: 'Too many requests',
           message: 'Rate limit exceeded. Please try again later.',
           statusCode: 429,
         })
@@ -365,7 +365,7 @@ describe('Error Handler Middleware', () => {
       expect(mockReply.status).toHaveBeenCalledWith(400);
     });
 
-    it('should prioritize validation error over rate limit', async () => {
+    it('should prioritize rate limit over validation error', async () => {
       const error = {
         message: 'Too many',
         statusCode: 429,
@@ -374,7 +374,7 @@ describe('Error Handler Middleware', () => {
 
       await errorHandler(error, mockRequest as any, mockReply as any);
 
-      expect(mockReply.status).toHaveBeenCalledWith(400);
+      expect(mockReply.status).toHaveBeenCalledWith(429);
     });
 
     it('should prioritize JWT error over default', async () => {

@@ -69,6 +69,14 @@ export function getRedis(): Redis {
   return redisClient;
 }
 
+export async function closeRedis(): Promise<void> {
+  if (redisClient) {
+    redisClient.disconnect();
+    redisClient = null;
+    connectionLogged = false;
+  }
+}
+
 /**
  * Cache Helper with TTL
  */

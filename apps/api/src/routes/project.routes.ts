@@ -22,7 +22,7 @@ export async function projectRoutes(app: FastifyInstance) {
       const body = createProjectSchema.parse(request.body);
       const user = request.user as any;
 
-      const projectId = `prj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const projectId = `prj_${Date.now()}_${crypto.randomUUID().replace(/-/g, '').slice(0, 9)}`;
 
       // Create project in database
       await prisma.project.create({
@@ -75,59 +75,67 @@ export async function projectRoutes(app: FastifyInstance) {
   app.get('/:projectId', {
     onRequest: [(app as any).authenticate],
   }, async (request, reply) => {
-    const { projectId } = request.params as { projectId: string };
-    const user = request.user as any;
-
-    // Check project belongs to user
-    const project = await prisma.project.findFirst({
-      where: { id: projectId, userId: user.id },
-    });
-
-    if (!project) {
-      return reply.status(404).send({
-        error: 'Not Found',
-        message: 'Project not found',
-      });
-    }
-
-    // Also check BullMQ job state for real-time progress
     try {
-      const queue = getProjectQueue();
-      const job = await queue.getJob(projectId);
+      const { projectId } = request.params as { projectId: string };
+      const user = request.user as any;
 
-      if (job) {
-        const jobState = await job.getState();
-        const progress = await job.progress;
+      // Check project belongs to user
+      const project = await prisma.project.findFirst({
+        where: { id: projectId, userId: user.id },
+      });
 
-        return reply.send({
-          projectId: project.id,
-          name: project.name,
-          prompt: project.prompt,
-          state: job.data.state || project.state,
-          jobState,
-          progress,
-          context: job.data.context || project.context,
-          deployUrl: project.deployUrl,
-          createdAt: project.createdAt,
-          updatedAt: project.updatedAt,
+      if (!project) {
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Project not found',
         });
       }
-    } catch {
-      // Queue might not be available, return DB data
-    }
 
-    return reply.send({
-      projectId: project.id,
-      name: project.name,
-      prompt: project.prompt,
-      state: project.state,
-      jobState: 'unknown',
-      progress: 0,
-      context: project.context,
-      deployUrl: project.deployUrl,
-      createdAt: project.createdAt,
-      updatedAt: project.updatedAt,
-    });
+      // Also check BullMQ job state for real-time progress
+      try {
+        const queue = getProjectQueue();
+        const job = await queue.getJob(projectId);
+
+        if (job) {
+          const jobState = await job.getState();
+          const progress = await job.progress;
+
+          return reply.send({
+            projectId: project.id,
+            name: project.name,
+            prompt: project.prompt,
+            state: job.data.state || project.state,
+            jobState,
+            progress,
+            context: job.data.context || project.context,
+            deployUrl: project.deployUrl,
+            createdAt: project.createdAt,
+            updatedAt: project.updatedAt,
+          });
+        }
+      } catch {
+        // Queue might not be available, return DB data
+      }
+
+      return reply.send({
+        projectId: project.id,
+        name: project.name,
+        prompt: project.prompt,
+        state: project.state,
+        jobState: 'unknown',
+        progress: 0,
+        context: project.context,
+        deployUrl: project.deployUrl,
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+      });
+    } catch (error: any) {
+      request.log.error({ error }, 'Failed to get project');
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to get project',
+      });
+    }
   });
 
   // List user projects
@@ -161,40 +169,48 @@ export async function projectRoutes(app: FastifyInstance) {
   app.delete('/:projectId', {
     onRequest: [(app as any).authenticate],
   }, async (request, reply) => {
-    const { projectId } = request.params as { projectId: string };
-    const user = request.user as any;
+    try {
+      const { projectId } = request.params as { projectId: string };
+      const user = request.user as any;
 
-    // Check project belongs to user
-    const project = await prisma.project.findFirst({
-      where: { id: projectId, userId: user.id },
-    });
+      // Check project belongs to user
+      const project = await prisma.project.findFirst({
+        where: { id: projectId, userId: user.id },
+      });
 
-    if (!project) {
-      return reply.status(404).send({
-        error: 'Not Found',
-        message: 'Project not found',
+      if (!project) {
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Project not found',
+        });
+      }
+
+      // Remove from BullMQ queue if exists
+      try {
+        const queue = getProjectQueue();
+        const job = await queue.getJob(projectId);
+        if (job) {
+          await job.remove();
+        }
+      } catch {
+        // Queue might not be available
+      }
+
+      // Delete from database (cascade will remove events and cost records)
+      await prisma.project.delete({
+        where: { id: projectId },
+      });
+
+      return reply.send({
+        success: true,
+        message: 'Project deleted',
+      });
+    } catch (error: any) {
+      request.log.error({ error }, 'Failed to delete project');
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to delete project',
       });
     }
-
-    // Remove from BullMQ queue if exists
-    try {
-      const queue = getProjectQueue();
-      const job = await queue.getJob(projectId);
-      if (job) {
-        await job.remove();
-      }
-    } catch {
-      // Queue might not be available
-    }
-
-    // Delete from database (cascade will remove events and cost records)
-    await prisma.project.delete({
-      where: { id: projectId },
-    });
-
-    return reply.send({
-      success: true,
-      message: 'Project deleted',
-    });
   });
 }

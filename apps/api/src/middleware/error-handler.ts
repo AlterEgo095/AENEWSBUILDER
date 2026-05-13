@@ -10,7 +10,36 @@ export async function errorHandler(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
-  logger.error({
+  // ── Rate limit errors (check FIRST — before generic error log) ──
+  const isRateLimitError =
+    (error as any).statusCode === 429 ||
+    (error as any).code === 'FST_ERR_RATE_LIMIT_EXCEEDED' ||
+    (error.message && /rate.?limit/i.test(error.message));
+
+  if (isRateLimitError) {
+    logger.warn({
+      ip: request.ip,
+      method: request.method,
+      url: request.url,
+      code: (error as any).code,
+    }, '⚠️ Rate limit exceeded');
+
+    reply.status(429).send({
+      error: 'Too many requests',
+      message: 'Rate limit exceeded. Please try again later.',
+      statusCode: 429,
+    });
+    return;
+  }
+
+  // ── Generic error logging (warn for 4xx, error for 5xx) ──
+  const isClientError = (error as any).statusCode >= 400 && (error as any).statusCode < 500;
+  const logFn = isClientError ? logger.warn.bind(logger) : logger.error.bind(logger);
+
+  // Strip sensitive headers before logging
+  const { authorization, cookie, 'x-api-key': xApiKey, ...safeHeaders } = request.headers;
+
+  logFn({
     error: {
       message: error.message,
       stack: error.stack,
@@ -19,9 +48,9 @@ export async function errorHandler(
     request: {
       method: request.method,
       url: request.url,
-      headers: request.headers,
+      headers: safeHeaders,
     },
-  }, '❌ Request error');
+  }, isClientError ? '⚠️ Client request error' : '❌ Request error');
 
   // Validation errors
   if (error.validation) {
@@ -44,18 +73,8 @@ export async function errorHandler(
     return;
   }
 
-  // Rate limit errors
-  if (error.statusCode === 429) {
-    reply.status(429).send({
-      error: 'Too Many Requests',
-      message: 'Rate limit exceeded. Please try again later.',
-      statusCode: 429,
-    });
-    return;
-  }
-
   // Default error
-  const statusCode = error.statusCode || 500;
+  const statusCode = (error as any).statusCode || 500;
   reply.status(statusCode).send({
     error: error.name || 'Internal Server Error',
     message: statusCode === 500 ? 'An unexpected error occurred' : error.message,

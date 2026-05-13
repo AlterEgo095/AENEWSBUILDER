@@ -78,13 +78,15 @@ export async function authRoutes(app: FastifyInstance) {
 
       return reply.status(201).send({
         success: true,
-        token,
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-          createdAt: user.createdAt,
+        data: {
+          token,
+          user: {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+            createdAt: user.createdAt,
+          },
         },
       });
     } catch (error: any) {

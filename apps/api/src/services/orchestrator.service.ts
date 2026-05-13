@@ -140,6 +140,9 @@ Return ONLY valid JSON, no explanations.`;
         });
         content = response.choices[0]?.message?.content || '';
         usedModel = 'gpt-4o-mini';
+        } catch (error) {
+          logger.warn({ error }, 'OpenAI classification failed, using defaults');
+        }
       }
 
       const classification = JSON.parse(content || '{}') as ProjectClassification;
@@ -234,6 +237,9 @@ Return ONLY valid JSON.`;
         }
         content = respContent.text;
         usedModel = 'claude-3-5-sonnet';
+        } catch (error) {
+          logger.warn({ error }, 'Anthropic planning failed, using defaults');
+        }
       }
 
       const plan = JSON.parse(content) as ProjectPlan;

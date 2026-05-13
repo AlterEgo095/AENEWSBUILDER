@@ -25,8 +25,9 @@ import { streamRoutes } from './routes/stream.routes.js';
 import { healthRoutes } from './routes/health.routes.js';
 import { adminRoutes } from './routes/admin.routes.js';
 import { chatRoutes } from './routes/chat.routes.js';
-import { initRedis } from './services/redis.service.js';
+import { initRedis, closeRedis } from './services/redis.service.js';
 import { initWorker } from './workers/index.js';
+import { prisma } from './config/prisma.js';
 import { initSentry, captureException } from './observability/sentry.js';
 import { initTracing, shutdownTracing } from './observability/tracing.js';
 import { securityEngine } from './services/security-engine.js';
@@ -34,6 +35,8 @@ import { contextMemory } from './services/context-memory.js';
 import { planVersioning } from './services/plan-versioning.js';
 import fs from 'fs';
 import path from 'path';
+
+let serverInstance: any = null;
 
 /**
  * Initialize Fastify Server with Production-Ready Configuration
@@ -105,11 +108,12 @@ async function bootstrap() {
           key,
         });
       },
-      // 🔥 CUSTOM ERROR RESPONSE
+      // 🔥 CUSTOM ERROR RESPONSE (429)
       errorResponseBuilder: (req, context) => {
         return {
-          error: 'Rate Limit Exceeded',
-          message: 'Too many requests, please slow down',
+          statusCode: 429,
+          error: 'Too many requests',
+          message: 'Rate limit exceeded. Please try again later.',
           retryAfter: context.after,
           limit: config.rateLimit.maxRequests,
         };
@@ -158,15 +162,16 @@ async function bootstrap() {
           throw new Error('Invalid token claims');
         }
         
-        // Check token expiration with clock skew tolerance (5 min)
+        // Check token expiration (strict — 30s grace for clock skew)
         const now = Math.floor(Date.now() / 1000);
-        if (decoded.exp && decoded.exp < now - 300) {
+        if (decoded.exp && decoded.exp < now) {
           throw new Error('Token expired');
         }
         
-        // Validate audience (if configured)
-        if (decoded.aud) {
-          // Audience claim present - validated
+        // Validate audience claim
+        const expectedAudience = config.jwt.audience || 'aenews-builder';
+        if (decoded.aud && decoded.aud !== expectedAudience) {
+          throw new Error('Invalid token audience');
         }
         
         // 🔥 CHECK TOKEN REVOCATION (Redis blacklist)
@@ -273,6 +278,9 @@ async function bootstrap() {
       host: config.server.host,
     });
 
+    // Store server reference for graceful shutdown
+    serverInstance = app.server;
+
     app.log.info(`
 ╔══════════════════════════════════════════════════════════════╗
 ║                                                              ║
@@ -298,17 +306,38 @@ async function bootstrap() {
 // 🔄 GRACEFUL SHUTDOWN
 // ============================================
 
-process.on('SIGTERM', async () => {
-  logger.info('SIGTERM received, closing server gracefully...');
-  await shutdownTracing();
-  process.exit(0);
-});
+async function gracefulShutdown(signal: string) {
+  logger.info(`${signal} received, closing server gracefully...`);
 
-process.on('SIGINT', async () => {
-  logger.info('SIGINT received, closing server gracefully...');
-  await shutdownTracing();
+  try {
+    // Close Fastify server (stop accepting new connections)
+    if (serverInstance) {
+      await serverInstance.close();
+    }
+
+    // Disconnect Prisma
+    await prisma.$disconnect();
+    logger.info('Prisma disconnected');
+
+    // Close Redis connection if available
+    try {
+      await closeRedis();
+      logger.info('Redis connection closed');
+    } catch {
+      // Redis may not be connected
+    }
+
+    await shutdownTracing();
+    logger.info('Graceful shutdown complete');
+  } catch (error) {
+    logger.error({ error }, 'Error during graceful shutdown');
+  }
+
   process.exit(0);
-});
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Start Application
 bootstrap();

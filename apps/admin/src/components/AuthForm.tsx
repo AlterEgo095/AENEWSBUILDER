@@ -24,7 +24,7 @@ export function AuthForm({ onLoginSuccess }: AuthFormProps) {
     setLoading(true);
 
     try {
-      await login(email, password);
+      await login(email, password, remember);
       toast.success('Welcome back!', 'Signed in successfully');
       onLoginSuccess?.();
     } catch (err) {

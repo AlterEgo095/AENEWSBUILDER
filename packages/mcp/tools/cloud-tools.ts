@@ -5,10 +5,62 @@
  *
  * Each adapter reads configuration from environment variables and uses
  * axios for REST APIs, child_process for CLI-based tools with safety checks.
+ *
+ * SECURITY: All CLI calls use execFileSync with argument arrays to prevent
+ * command injection. Input validation is applied to user-controlled parameters.
  */
 
 import axios from 'axios';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Input Validation Helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
+const RE_BUCKET_NAME = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
+const RE_BUCKET_NAME_SHORT = /^[a-z0-9]{3,63}$/;
+
+/** Validate an S3 bucket name */
+function validateBucketName(bucket: string): void {
+  if (!RE_BUCKET_NAME.test(bucket) && !RE_BUCKET_NAME_SHORT.test(bucket)) {
+    throw new Error(`Invalid bucket name: must match S3 naming rules (lowercase, dots, hyphens, 3-63 chars)`);
+  }
+}
+
+/** Validate an S3 object key */
+function validateS3Key(key: string): void {
+  if (key.startsWith('/') || key.includes('..')) {
+    throw new Error('Invalid S3 key: must not start with "/" or contain ".."');
+  }
+}
+
+/** Validate a CloudFormation/Pulumi stack name */
+function validateStackName(name: string): void {
+  if (!/^[a-zA-Z][a-zA-Z0-9-]{0,127}$/.test(name)) {
+    throw new Error('Invalid stack name: must start with a letter, contain only letters, digits, and hyphens, max 128 chars');
+  }
+}
+
+/** Validate a Kubernetes resource name (DNS subdomain) */
+function validateK8sName(value: string, label: string = 'resource'): void {
+  if (!/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(value) || value.length > 253) {
+    throw new Error(`Invalid Kubernetes ${label}: must be a valid DNS subdomain (lowercase, digits, hyphens, 1-253 chars)`);
+  }
+}
+
+/** Validate a Kubernetes resource type (e.g., pod, deployment, service) */
+function validateK8sResourceType(resource: string): void {
+  if (!/^[a-z][a-z0-9]*([.][a-z0-9]+)*$/.test(resource)) {
+    throw new Error(`Invalid Kubernetes resource type: "${resource}"`);
+  }
+}
+
+/** Validate a Docker container ID */
+function validateContainerId(id: string): void {
+  if (!/^[a-f0-9]{12,64}$/.test(id)) {
+    throw new Error(`Invalid container ID: must be a hex string of 12-64 characters`);
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AWS
@@ -26,12 +78,14 @@ export class AWSAdapter {
   }
 
   /** Helper: run AWS CLI command with safety checks */
-  private aws(args: string, timeout: number = 30000): string {
+  private aws(args: string[], timeout: number = 30000): string {
     const dangerousFlags = ['--profile', '--credentials-file'];
-    if (dangerousFlags.some((f) => args.includes(f))) {
-      throw new Error('Flag not allowed in sandbox mode');
+    for (const arg of args) {
+      if (dangerousFlags.some((f) => arg.startsWith(f))) {
+        throw new Error('Flag not allowed in sandbox mode');
+      }
     }
-    return execSync(`aws ${args} --region ${this.region} --output json`, {
+    return execFileSync('aws', [...args, '--region', this.region, '--output', 'json'], {
       timeout,
       encoding: 'utf-8',
     }).trim();
@@ -40,7 +94,7 @@ export class AWSAdapter {
   /** List all S3 buckets */
   async s3ListBuckets(): Promise<any> {
     try {
-      const out = this.aws('s3 ls');
+      const out = this.aws(['s3', 'ls']);
       return { success: true, data: out ? JSON.parse(out) : [] };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -50,13 +104,14 @@ export class AWSAdapter {
   /** Upload a string body to an S3 bucket */
   async s3Upload(bucket: string, key: string, body: string): Promise<any> {
     try {
-      // Write to temp file and upload to avoid shell escaping issues
+      validateBucketName(bucket);
+      validateS3Key(key);
       const fs = await import('fs');
       const os = await import('os');
       const path = await import('path');
       const tmpFile = path.join(os.tmpdir(), `mcp-s3-${Date.now()}.txt`);
       fs.writeFileSync(tmpFile, body, 'utf-8');
-      execSync(`aws s3 cp "${tmpFile}" "s3://${bucket}/${key}" --region ${this.region}`, { timeout: 60000 });
+      execFileSync('aws', ['s3', 'cp', tmpFile, `s3://${bucket}/${key}`, '--region', this.region], { timeout: 60000 });
       fs.unlinkSync(tmpFile);
       return { success: true, data: { bucket, key, uploaded: true } };
     } catch (error: any) {
@@ -67,7 +122,7 @@ export class AWSAdapter {
   /** Describe all EC2 instances */
   async ec2DescribeInstances(): Promise<any> {
     try {
-      const out = this.aws('ec2 describe-instances');
+      const out = this.aws(['ec2', 'describe-instances']);
       const data = JSON.parse(out);
       const instances = (data.Reservations || [])
         .flatMap((r: any) => r.Instances || [])
@@ -89,7 +144,7 @@ export class AWSAdapter {
   /** List all Lambda functions */
   async lambdaListFunctions(): Promise<any> {
     try {
-      const out = this.aws('lambda list-functions');
+      const out = this.aws(['lambda', 'list-functions']);
       const data = JSON.parse(out);
       const functions = (data.Functions || []).map((f: any) => ({
         name: f.FunctionName,
@@ -108,13 +163,14 @@ export class AWSAdapter {
   /** Deploy a CloudFormation stack from a template body */
   async cloudformationDeploy(stackName: string, template: string): Promise<any> {
     try {
+      validateStackName(stackName);
       const fs = await import('fs');
       const os = await import('os');
       const path = await import('path');
       const tmpFile = path.join(os.tmpdir(), `mcp-cf-${Date.now()}.yaml`);
       fs.writeFileSync(tmpFile, template, 'utf-8');
       const out = this.aws(
-        `cloudformation create-stack --stack-name "${stackName}" --template-body "file://${tmpFile}" --capabilities CAPABILITY_IAM`
+        ['cloudformation', 'create-stack', '--stack-name', stackName, '--template-body', `file://${tmpFile}`, '--capabilities', 'CAPABILITY_IAM']
       );
       fs.unlinkSync(tmpFile);
       return { success: true, data: out ? JSON.parse(out) : { stackName, status: 'CREATE_IN_PROGRESS' } };
@@ -126,7 +182,7 @@ export class AWSAdapter {
   /** Get the caller's AWS identity */
   async stsGetCallerIdentity(): Promise<any> {
     try {
-      const out = this.aws('sts get-caller-identity');
+      const out = this.aws(['sts', 'get-caller-identity']);
       return { success: true, data: JSON.parse(out) };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -150,9 +206,10 @@ export class KubernetesAdapter {
   }
 
   /** Helper: run kubectl with optional namespace flag */
-  private kubectl(args: string, timeout: number = 15000): string {
-    const kubeFlag = this.kubeconfig ? ` --kubeconfig="${this.kubeconfig}"` : '';
-    return execSync(`kubectl${kubeFlag} ${args} -o json`, {
+  private kubectl(args: string[], timeout: number = 15000): string {
+    const baseArgs: string[] = [];
+    if (this.kubeconfig) baseArgs.push('--kubeconfig', this.kubeconfig);
+    return execFileSync('kubectl', [...baseArgs, ...args, '-o', 'json'], {
       timeout,
       encoding: 'utf-8',
     }).trim();
@@ -161,8 +218,14 @@ export class KubernetesAdapter {
   /** List pods in a namespace (default: all) */
   async getPods(namespace?: string): Promise<any> {
     try {
-      const nsFlag = namespace ? ` -n ${namespace}` : ' -A';
-      const out = this.kubectl(`get pods${nsFlag}`);
+      const args = ['get', 'pods'];
+      if (namespace) {
+        validateK8sName(namespace, 'namespace');
+        args.push('-n', namespace);
+      } else {
+        args.push('-A');
+      }
+      const out = this.kubectl(args);
       const data = JSON.parse(out);
       const items = (data.items || []).map((p: any) => ({
         name: p.metadata?.name,
@@ -181,8 +244,14 @@ export class KubernetesAdapter {
   /** List deployments in a namespace */
   async getDeployments(namespace?: string): Promise<any> {
     try {
-      const nsFlag = namespace ? ` -n ${namespace}` : ' -A';
-      const out = this.kubectl(`get deployments${nsFlag}`);
+      const args = ['get', 'deployments'];
+      if (namespace) {
+        validateK8sName(namespace, 'namespace');
+        args.push('-n', namespace);
+      } else {
+        args.push('-A');
+      }
+      const out = this.kubectl(args);
       const data = JSON.parse(out);
       const items = (data.items || []).map((d: any) => ({
         name: d.metadata?.name,
@@ -200,8 +269,14 @@ export class KubernetesAdapter {
   /** List services in a namespace */
   async getServices(namespace?: string): Promise<any> {
     try {
-      const nsFlag = namespace ? ` -n ${namespace}` : ' -A';
-      const out = this.kubectl(`get services${nsFlag}`);
+      const args = ['get', 'services'];
+      if (namespace) {
+        validateK8sName(namespace, 'namespace');
+        args.push('-n', namespace);
+      } else {
+        args.push('-A');
+      }
+      const out = this.kubectl(args);
       const data = JSON.parse(out);
       const items = (data.items || []).map((s: any) => ({
         name: s.metadata?.name,
@@ -219,7 +294,7 @@ export class KubernetesAdapter {
   /** List all namespaces */
   async getNamespaces(): Promise<any> {
     try {
-      const out = this.kubectl('get namespaces');
+      const out = this.kubectl(['get', 'namespaces']);
       const data = JSON.parse(out);
       const items = (data.items || []).map((n: any) => ({
         name: n.metadata?.name,
@@ -235,12 +310,14 @@ export class KubernetesAdapter {
   /** Get logs for a specific pod and container */
   async getLogs(namespace: string, pod: string, container?: string): Promise<any> {
     try {
-      const containerFlag = container ? ` -c ${container}` : '';
-      const kubeFlag = this.kubeconfig ? ` --kubeconfig="${this.kubeconfig}"` : '';
-      const out = execSync(
-        `kubectl${kubeFlag} logs ${pod} -n ${namespace}${containerFlag} --tail=100`,
-        { timeout: 15000, encoding: 'utf-8' }
-      ).trim();
+      validateK8sName(namespace, 'namespace');
+      validateK8sName(pod, 'pod');
+      if (container) validateK8sName(container, 'container');
+      const args: string[] = [];
+      if (this.kubeconfig) args.push('--kubeconfig', this.kubeconfig);
+      args.push('logs', pod, '-n', namespace, '--tail=100');
+      if (container) args.push('-c', container);
+      const out = execFileSync('kubectl', args, { timeout: 15000, encoding: 'utf-8' }).trim();
       return { success: true, data: { pod, namespace, container, logs: out } };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -255,10 +332,10 @@ export class KubernetesAdapter {
       const path = await import('path');
       const tmpFile = path.join(os.tmpdir(), `mcp-k8s-${Date.now()}.yaml`);
       fs.writeFileSync(tmpFile, resource, 'utf-8');
-      const kubeFlag = this.kubeconfig ? ` --kubeconfig="${this.kubeconfig}"` : '';
-      const out = execSync(`kubectl${kubeFlag} apply -f "${tmpFile}"`, {
-        timeout: 30000, encoding: 'utf-8',
-      }).trim();
+      const args: string[] = [];
+      if (this.kubeconfig) args.push('--kubeconfig', this.kubeconfig);
+      args.push('apply', '-f', tmpFile);
+      const out = execFileSync('kubectl', args, { timeout: 30000, encoding: 'utf-8' }).trim();
       fs.unlinkSync(tmpFile);
       return { success: true, data: { output: out } };
     } catch (error: any) {
@@ -269,10 +346,13 @@ export class KubernetesAdapter {
   /** Delete a resource by type and name */
   async delete(namespace: string, resource: string, name: string): Promise<any> {
     try {
-      const kubeFlag = this.kubeconfig ? ` --kubeconfig="${this.kubeconfig}"` : '';
-      const out = execSync(`kubectl${kubeFlag} delete ${resource} ${name} -n ${namespace}`, {
-        timeout: 30000, encoding: 'utf-8',
-      }).trim();
+      validateK8sName(namespace, 'namespace');
+      validateK8sName(name, 'resource name');
+      validateK8sResourceType(resource);
+      const args: string[] = [];
+      if (this.kubeconfig) args.push('--kubeconfig', this.kubeconfig);
+      args.push('delete', resource, name, '-n', namespace);
+      const out = execFileSync('kubectl', args, { timeout: 30000, encoding: 'utf-8' }).trim();
       return { success: true, data: { output: out, deleted: true } };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -293,7 +373,7 @@ export class TerraformAdapter {
   async init(configDir: string): Promise<string> {
     try {
       if (!this.isValidPath(configDir)) throw new Error('Path traversal detected');
-      const out = execSync(`terraform -chdir="${configDir}" init -no-color`, {
+      const out = execFileSync('terraform', ['-chdir', configDir, 'init', '-no-color'], {
         timeout: 60000, encoding: 'utf-8',
       });
       return out;
@@ -306,7 +386,7 @@ export class TerraformAdapter {
   async plan(configDir: string): Promise<string> {
     try {
       if (!this.isValidPath(configDir)) throw new Error('Path traversal detected');
-      const out = execSync(`terraform -chdir="${configDir}" plan -no-color`, {
+      const out = execFileSync('terraform', ['-chdir', configDir, 'plan', '-no-color'], {
         timeout: 120000, encoding: 'utf-8',
       });
       return out;
@@ -319,7 +399,7 @@ export class TerraformAdapter {
   async apply(configDir: string): Promise<string> {
     try {
       if (!this.isValidPath(configDir)) throw new Error('Path traversal detected');
-      const out = execSync(`terraform -chdir="${configDir}" apply -auto-approve -no-color`, {
+      const out = execFileSync('terraform', ['-chdir', configDir, 'apply', '-auto-approve', '-no-color'], {
         timeout: 300000, encoding: 'utf-8',
       });
       return out;
@@ -332,7 +412,7 @@ export class TerraformAdapter {
   async destroy(configDir: string): Promise<string> {
     try {
       if (!this.isValidPath(configDir)) throw new Error('Path traversal detected');
-      const out = execSync(`terraform -chdir="${configDir}" destroy -auto-approve -no-color`, {
+      const out = execFileSync('terraform', ['-chdir', configDir, 'destroy', '-auto-approve', '-no-color'], {
         timeout: 300000, encoding: 'utf-8',
       });
       return out;
@@ -345,7 +425,7 @@ export class TerraformAdapter {
   async show(configDir: string): Promise<any> {
     try {
       if (!this.isValidPath(configDir)) throw new Error('Path traversal detected');
-      const out = execSync(`terraform -chdir="${configDir}" show -json`, {
+      const out = execFileSync('terraform', ['-chdir', configDir, 'show', '-json'], {
         timeout: 30000, encoding: 'utf-8',
       });
       return { success: true, data: JSON.parse(out) };
@@ -373,8 +453,9 @@ export class PulumiAdapter {
   /** Preview infrastructure changes */
   async preview(stackName: string): Promise<any> {
     try {
-      const out = execSync(
-        `pulumi preview --stack "${stackName}" --json`,
+      validateStackName(stackName);
+      const out = execFileSync(
+        'pulumi', ['preview', '--stack', stackName, '--json'],
         { timeout: 120000, encoding: 'utf-8' }
       );
       return { success: true, data: JSON.parse(out) };
@@ -386,8 +467,9 @@ export class PulumiAdapter {
   /** Deploy infrastructure changes */
   async up(stackName: string): Promise<any> {
     try {
-      const out = execSync(
-        `pulumi up --stack "${stackName}" --yes --json`,
+      validateStackName(stackName);
+      const out = execFileSync(
+        'pulumi', ['up', '--stack', stackName, '--yes', '--json'],
         { timeout: 300000, encoding: 'utf-8' }
       );
       return { success: true, data: JSON.parse(out) };
@@ -399,8 +481,9 @@ export class PulumiAdapter {
   /** Destroy all managed infrastructure */
   async destroy(stackName: string): Promise<any> {
     try {
-      const out = execSync(
-        `pulumi destroy --stack "${stackName}" --yes --json`,
+      validateStackName(stackName);
+      const out = execFileSync(
+        'pulumi', ['destroy', '--stack', stackName, '--yes', '--json'],
         { timeout: 300000, encoding: 'utf-8' }
       );
       return { success: true, data: JSON.parse(out) };
@@ -412,8 +495,9 @@ export class PulumiAdapter {
   /** Get stack outputs */
   async getStackOutputs(stackName: string): Promise<any> {
     try {
-      const out = execSync(
-        `pulumi stack output --stack "${stackName}" --json`,
+      validateStackName(stackName);
+      const out = execFileSync(
+        'pulumi', ['stack', 'output', '--stack', stackName, '--json'],
         { timeout: 30000, encoding: 'utf-8' }
       );
       return { success: true, data: JSON.parse(out) };
@@ -439,9 +523,11 @@ export class AzureAdapter {
   }
 
   /** Helper: run az CLI command */
-  private az(args: string, timeout: number = 30000): string {
-    const subFlag = this.subscriptionId ? ` --subscription "${this.subscriptionId}"` : '';
-    return execSync(`az ${args}${subFlag} --output json`, {
+  private az(args: string[], timeout: number = 30000): string {
+    const fullArgs = [...args];
+    if (this.subscriptionId) fullArgs.push('--subscription', this.subscriptionId);
+    fullArgs.push('--output', 'json');
+    return execFileSync('az', fullArgs, {
       timeout, encoding: 'utf-8',
     }).trim();
   }
@@ -449,8 +535,9 @@ export class AzureAdapter {
   /** List resources in a resource group or subscription */
   async listResources(resourceGroup?: string): Promise<any> {
     try {
-      const rgFlag = resourceGroup ? ` --resource-group "${resourceGroup}"` : '';
-      const out = this.az(`resource list${rgFlag}`);
+      const args = ['resource', 'list'];
+      if (resourceGroup) args.push('--resource-group', resourceGroup);
+      const out = this.az(args);
       const resources = JSON.parse(out);
       return { success: true, data: { resources, count: resources.length } };
     } catch (error: any) {
@@ -461,7 +548,7 @@ export class AzureAdapter {
   /** Execute an Azure Resource Graph query */
   async getResourceGraph(query: string): Promise<any> {
     try {
-      const out = this.az(`graph query --query "${query}"`);
+      const out = this.az(['graph', 'query', '--query', query]);
       return { success: true, data: JSON.parse(out) };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -471,7 +558,7 @@ export class AzureAdapter {
   /** List all virtual machines */
   async getVMs(): Promise<any> {
     try {
-      const out = this.az('vm list --show-details');
+      const out = this.az(['vm', 'list', '--show-details']);
       const vms = JSON.parse(out);
       return { success: true, data: { vms, count: vms.length } };
     } catch (error: any) {
@@ -482,7 +569,7 @@ export class AzureAdapter {
   /** List all storage accounts */
   async getStorageAccounts(): Promise<any> {
     try {
-      const out = this.az('storage account list');
+      const out = this.az(['storage', 'account', 'list']);
       const accounts = JSON.parse(out);
       return { success: true, data: { accounts, count: accounts.length } };
     } catch (error: any) {
@@ -608,7 +695,7 @@ export class DockerAdapter {
   /** List all containers */
   async listContainers(): Promise<any> {
     try {
-      const out = execSync('docker ps -a --format "{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}"', {
+      const out = execFileSync('docker', ['ps', '-a', '--format', '{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}'], {
         timeout: 10000, encoding: 'utf-8',
       }).trim();
       if (!out) return { success: true, data: [] };
@@ -625,7 +712,8 @@ export class DockerAdapter {
   /** Get resource usage stats for a container */
   async getContainerStats(id: string): Promise<any> {
     try {
-      const out = execSync(`docker stats ${id} --no-stream --format "{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}"`, {
+      validateContainerId(id);
+      const out = execFileSync('docker', ['stats', id, '--no-stream', '--format', '{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}'], {
         timeout: 15000, encoding: 'utf-8',
       }).trim();
       const [cpu, mem, netIO, blockIO] = out.split('|');
@@ -638,7 +726,7 @@ export class DockerAdapter {
   /** List all Docker images */
   async getImages(): Promise<any> {
     try {
-      const out = execSync('docker images --format "{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}|{{.CreatedSince}}"', {
+      const out = execFileSync('docker', ['images', '--format', '{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}|{{.CreatedSince}}'], {
         timeout: 10000, encoding: 'utf-8',
       }).trim();
       if (!out) return { success: true, data: [] };
@@ -655,7 +743,7 @@ export class DockerAdapter {
   /** List all Docker networks */
   async getNetworks(): Promise<any> {
     try {
-      const out = execSync('docker network ls --format "{{.ID}}|{{.Name}}|{{.Driver}}|{{.Scope}}"', {
+      const out = execFileSync('docker', ['network', 'ls', '--format', '{{.ID}}|{{.Name}}|{{.Driver}}|{{.Scope}}'], {
         timeout: 10000, encoding: 'utf-8',
       }).trim();
       if (!out) return { success: true, data: [] };
@@ -672,7 +760,7 @@ export class DockerAdapter {
   /** List all Docker volumes */
   async getVolumes(): Promise<any> {
     try {
-      const out = execSync('docker volume ls --format "{{.Name}}|{{.Driver}}"', {
+      const out = execFileSync('docker', ['volume', 'ls', '--format', '{{.Name}}|{{.Driver}}'], {
         timeout: 10000, encoding: 'utf-8',
       }).trim();
       if (!out) return { success: true, data: [] };
@@ -777,8 +865,8 @@ export class AlibabaCloudAdapter {
   }
 
   /** Helper: run aliyun CLI */
-  private aliyun(args: string, timeout: number = 30000): string {
-    return execSync(`aliyun ${args} --region "${this.region}" --output json`, {
+  private aliyun(args: string[], timeout: number = 30000): string {
+    return execFileSync('aliyun', [...args, '--region', this.region, '--output', 'json'], {
       timeout, encoding: 'utf-8',
     }).trim();
   }
@@ -786,7 +874,7 @@ export class AlibabaCloudAdapter {
   /** Describe ECS instances */
   async describeECSInstances(): Promise<any> {
     try {
-      const out = this.aliyun('ecs DescribeInstances --PageSize 50');
+      const out = this.aliyun(['ecs', 'DescribeInstances', '--PageSize', '50']);
       const data = JSON.parse(out);
       const instances = (data.Instances?.Instance || []).map((i: any) => ({
         instanceId: i.InstanceId,
@@ -806,7 +894,7 @@ export class AlibabaCloudAdapter {
   /** List all OSS buckets */
   async listBuckets(): Promise<any> {
     try {
-      const out = this.aliyun('oss ls');
+      const out = this.aliyun(['oss', 'ls']);
       const data = JSON.parse(out);
       const buckets = (data.Buckets?.Bucket || []).map((b: any) => ({
         name: b.Name,
@@ -824,13 +912,13 @@ export class AlibabaCloudAdapter {
   async queryMonitor(metrics: any): Promise<any> {
     try {
       const args = [
-        'cms QueryMetricList',
-        `--Namespace "${metrics.namespace}"`,
-        `--MetricName "${metrics.metricName}"`,
-        `--StartTime "${metrics.startTime || ''}"`,
-        `--EndTime "${metrics.endTime || ''}"`,
-        `--Period "${metrics.period || '60'"`,
-      ].join(' ');
+        'cms', 'QueryMetricList',
+        '--Namespace', metrics.namespace,
+        '--MetricName', metrics.metricName,
+        '--StartTime', metrics.startTime || '',
+        '--EndTime', metrics.endTime || '',
+        '--Period', metrics.period || '60',
+      ];
       const out = this.aliyun(args);
       const data = JSON.parse(out);
       return { success: true, data };

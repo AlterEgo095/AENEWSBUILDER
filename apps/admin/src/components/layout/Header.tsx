@@ -1,7 +1,8 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import clsx from 'clsx';
 import { Search, Bell, ChevronDown, LogOut, User, Settings, Menu } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
+import { useNavigate } from 'react-router-dom';
 
 export interface HeaderProps {
   title: string;
@@ -12,8 +13,16 @@ export interface HeaderProps {
 
 export function Header({ title, subtitle, onMenuToggle, className }: HeaderProps) {
   const { user, logout, isAdmin } = useAuth();
+  const navigate = useNavigate();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [searchValue, setSearchValue] = useState('');
+
+  const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && searchValue.trim()) {
+      navigate(`/projects?search=${encodeURIComponent(searchValue.trim())}`);
+    }
+  }, [navigate, searchValue]);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
@@ -68,6 +77,9 @@ export function Header({ title, subtitle, onMenuToggle, className }: HeaderProps
           <input
             type="text"
             placeholder="Search..."
+            value={searchValue}
+            onChange={e => setSearchValue(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
             className="input-dark pl-9 w-56 py-1.5 text-xs"
           />
         </div>
@@ -80,7 +92,6 @@ export function Header({ title, subtitle, onMenuToggle, className }: HeaderProps
             aria-label="Notifications"
           >
             <Bell size={18} />
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-brand rounded-full" />
           </button>
           {notifOpen && (
             <div className="absolute right-0 mt-2 w-72 glass rounded-xl shadow-glass-lg animate-scale-in overflow-hidden">
@@ -127,11 +138,11 @@ export function Header({ title, subtitle, onMenuToggle, className }: HeaderProps
                 </p>
               </div>
               <div className="p-1">
-                <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-zinc-400 hover:text-white hover:bg-white/[0.04] transition-colors">
+                <button onClick={() => { setDropdownOpen(false); navigate('/settings'); }} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-zinc-400 hover:text-white hover:bg-white/[0.04] transition-colors">
                   <User size={14} />
                   Profile
                 </button>
-                <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-zinc-400 hover:text-white hover:bg-white/[0.04] transition-colors">
+                <button onClick={() => { setDropdownOpen(false); navigate('/settings'); }} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-zinc-400 hover:text-white hover:bg-white/[0.04] transition-colors">
                   <Settings size={14} />
                   Settings
                 </button>

@@ -17,7 +17,6 @@ import { getProjectQueue } from '../workers/index.js';
 import type { ProjectJob } from '../workers/index.js';
 import { eventStoreV2 } from '../workers/event-store-v2.js';
 import { warmPool } from '../sandbox/warm-pool.js';
-import { CostTracker } from '../workers/cost-tracker.js';
 import { mcpCatalog } from '@aenews/mcp';
 
 // ── Redis hash key for platform settings ──────────────────────────────────────
@@ -96,13 +95,13 @@ export async function adminRoutes(app: FastifyInstance) {
         prisma.project.count({ where: { state: 'DONE' } }),
         prisma.project.count({ where: { state: 'FAILED' } }),
         // Daily projects over last 30 days (PostgreSQL)
-        prisma.$queryRawUnsafe<Array<{ date: string; count: bigint }>>(`
-          SELECT DATE("createdAt") AS date, COUNT(*)::bigint AS count
+        prisma.$queryRaw<Array<{ date: string; count: bigint }>>`
+          SELECT DATE("createdAt")::text AS date, COUNT(*)::bigint AS count
           FROM projects
-          WHERE "createdAt" >= $1
+          WHERE "createdAt" >= ${thirtyDaysAgo}
           GROUP BY DATE("createdAt")
           ORDER BY date ASC
-        `, thirtyDaysAgo),
+        `,
       ]);
 
       const totalResolved = completedProjects + failedProjects;
@@ -373,7 +372,9 @@ export async function adminRoutes(app: FastifyInstance) {
         // Sync Redis cache key used by authorizeAdmin middleware
         try {
           const redis = getRedis();
-          await redis.set(`user:${id}:role`, body.role, 'EX', 3600);
+          // Invalidate stale cache before writing new value (TTL: 60s for fast propagation)
+          await redis.del(`user:${id}:role`);
+          await redis.set(`user:${id}:role`, body.role, 'EX', 60);
         } catch {
           // Redis cache update is best-effort
         }
@@ -418,7 +419,7 @@ export async function adminRoutes(app: FastifyInstance) {
       // Clean up Redis metadata
       try {
         const redis = getRedis();
-        await redis.del(`user:banned:${id}`, `user:${id}:meta`);
+        await redis.del(`user:banned:${id}`, `user:${id}:meta`, `user:${id}:role`);
       } catch {
         // Redis cleanup is best-effort
       }
@@ -827,26 +828,24 @@ export async function adminRoutes(app: FastifyInstance) {
       };
 
       // Daily cost aggregation
-      const dailyCosts = await prisma.costRecord.groupBy({
-        by: ['timestamp'],
-        where: baseWhere,
-        _sum: { cost: true, tokens: true },
-        _count: true,
-      });
+      const dailyCosts = await prisma.$queryRaw<Array<{ date: string; cost: number; tokens: number; count: bigint }>>`
+        SELECT DATE("timestamp")::text AS date,
+               SUM(cost)::float AS cost,
+               SUM(tokens)::bigint AS tokens,
+               COUNT(*)::bigint AS count
+        FROM cost_records
+        WHERE "timestamp" >= ${from}
+        GROUP BY DATE("timestamp")
+        ORDER BY date
+      `;
 
-      // Group by day
-      const dailyMap = new Map<string, { cost: number; tokens: number; count: number }>();
-      for (const row of dailyCosts) {
-        const day = new Date(row.timestamp).toISOString().split('T')[0];
-        const existing = dailyMap.get(day) || { cost: 0, tokens: 0, count: 0 };
-        existing.cost += row._sum.cost || 0;
-        existing.tokens += row._sum.tokens || 0;
-        existing.count += row._count;
-        dailyMap.set(day, existing);
-      }
-      const daily = Array.from(dailyMap.entries())
-        .map(([date, agg]) => ({ date, ...agg }))
-        .sort((a, b) => a.date.localeCompare(b.date));
+      // Map to expected format
+      const daily = dailyCosts.map((row) => ({
+        date: row.date,
+        cost: row.cost,
+        tokens: Number(row.tokens),
+        count: Number(row.count),
+      }));
 
       // Cost by operation
       const byOperation = await prisma.costRecord.groupBy({

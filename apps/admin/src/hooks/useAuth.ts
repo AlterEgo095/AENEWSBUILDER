@@ -17,8 +17,15 @@ export function useAuth() {
     loading: true,
   });
 
+  const clearAuthStorage = useCallback(() => {
+    localStorage.removeItem('admin_token');
+    localStorage.removeItem('admin_user');
+    sessionStorage.removeItem('admin_token');
+    sessionStorage.removeItem('admin_user');
+  }, []);
+
   const checkAuth = useCallback(async () => {
-    const token = localStorage.getItem('admin_token');
+    const token = localStorage.getItem('admin_token') || sessionStorage.getItem('admin_token');
     if (!token) {
       setState({ user: null, isAuthenticated: false, isAdmin: false, loading: false });
       return;
@@ -37,13 +44,11 @@ export function useAuth() {
           loading: false,
         });
       } else {
-        localStorage.removeItem('admin_token');
-        localStorage.removeItem('admin_user');
+        clearAuthStorage();
         setState({ user: null, isAuthenticated: false, isAdmin: false, loading: false });
       }
     } catch {
-      localStorage.removeItem('admin_token');
-      localStorage.removeItem('admin_user');
+      clearAuthStorage();
       setState({ user: null, isAuthenticated: false, isAdmin: false, loading: false });
     }
   }, []);
@@ -52,12 +57,13 @@ export function useAuth() {
     checkAuth();
   }, [checkAuth]);
 
-  const login = useCallback(async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string, remember = true) => {
     const res = await api.login(email, password);
     if (res.success && res.data) {
       const { token, user } = res.data;
-      localStorage.setItem('admin_token', token);
-      localStorage.setItem('admin_user', JSON.stringify(user));
+      const storage = remember ? localStorage : sessionStorage;
+      storage.setItem('admin_token', token);
+      storage.setItem('admin_user', JSON.stringify(user));
       setState({
         user,
         isAuthenticated: true,
@@ -70,8 +76,7 @@ export function useAuth() {
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('admin_token');
-    localStorage.removeItem('admin_user');
+    clearAuthStorage();
     setState({ user: null, isAuthenticated: false, isAdmin: false, loading: false });
   }, []);
 

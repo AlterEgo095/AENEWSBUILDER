@@ -29,13 +29,19 @@ export function useApi<T>(
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
 
+  // Store callbacks in refs so execute is stable (prevents infinite re-fetch loop)
+  const onSuccessRef = useRef(onSuccess);
+  const onErrorRef = useRef(onError);
+  useEffect(() => { onSuccessRef.current = onSuccess; });
+  useEffect(() => { onErrorRef.current = onError; });
+
   const execute = useCallback(async () => {
     setState(prev => ({ ...prev, loading: true, error: null }));
     try {
       const data = await fetcherRef.current();
       if (mountedRef.current) {
         setState({ data, loading: false, error: null });
-        onSuccess?.(data);
+        onSuccessRef.current?.(data);
       }
     } catch (err) {
       if (mountedRef.current) {
@@ -43,10 +49,10 @@ export function useApi<T>(
           ? err.message
           : 'An unexpected error occurred';
         setState({ data: null, loading: false, error: message });
-        onError?.(message);
+        onErrorRef.current?.(message);
       }
     }
-  }, [onSuccess, onError]);
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
