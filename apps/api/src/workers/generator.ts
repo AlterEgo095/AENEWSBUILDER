@@ -431,8 +431,9 @@ export class Generator {
     const registry = MODEL_REGISTRY[model];
     const actualModel = registry?.name || model;
 
-    // Use higher token limit for code-specialized models
-    const maxTokens = actualModel.includes('coder') ? 16384 : config.cost.maxTokensPerRequest;
+    // Cap max_tokens to the model's own limit from registry, never exceed it
+    const modelMaxTokens = registry?.maxTokens || 8192;
+    const maxTokens = Math.min(config.cost.maxTokensPerRequest, modelMaxTokens);
 
     const response = await dashscope.chat.completions.create({
       model: actualModel,

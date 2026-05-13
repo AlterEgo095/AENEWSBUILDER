@@ -67,7 +67,7 @@ export interface Step {
 }
 
 export interface DecisionResult {
-  model: 'qwen3-coder-480b' | 'qwen-max' | 'qwen3.6-plus' | 'qwen-turbo' | 'qwen3.6-flash' | 'qwen3-32b' | 'qwen3.5-35b' | 'qwen-vl-max' | 'qwen-plus' | 'qwq-32b' | 'qwen-long' | 'gpt-4o' | 'gpt-4o-mini' | 'claude-sonnet' | 'claude-opus';
+  model: 'qwen3-coder-480b' | 'qwen3-coder-plus' | 'qwen3-max' | 'qwen-max' | 'qwen3.6-plus' | 'qwen-turbo' | 'qwen3.6-flash' | 'qwen3-32b' | 'qwen3.5-35b' | 'qwen3.5-plus' | 'qwen-vl-max' | 'qwen-plus' | 'qwen-coder-plus' | 'gpt-4o' | 'claude-sonnet' | 'claude-opus';
   mcpTools: string[];
   estimatedCost: number;
   reasoning: string;
@@ -109,7 +109,7 @@ Return ONLY valid JSON, no explanations.`;
       if (dashscope) {
         try {
           const response = await dashscope.chat.completions.create({
-            model: 'qwen3.6-plus',
+            model: 'qwen-turbo',
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: prompt },
@@ -119,7 +119,7 @@ Return ONLY valid JSON, no explanations.`;
             response_format: { type: 'json_object' },
           });
           content = response.choices[0]?.message?.content || '';
-          usedModel = 'qwen3.6-plus';
+          usedModel = 'qwen-turbo';
         } catch (dsError) {
           logger.warn({ error: dsError }, '⚠️ DashScope classification failed, falling back to OpenAI');
         }
@@ -145,7 +145,13 @@ Return ONLY valid JSON, no explanations.`;
         }
       }
 
-      const classification = JSON.parse(content || '{}') as ProjectClassification;
+      // Clean markdown fences if the model wrapped JSON (qwen-turbo sometimes does)
+      let cleanContent = (content || '').trim();
+      if (cleanContent.startsWith('```')) {
+        cleanContent = cleanContent.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+      }
+
+      const classification = JSON.parse(cleanContent || '{}') as ProjectClassification;
 
       // Cache for 24h
       await getCache().set(cacheKey, classification, config.cache.ttl.classification);
@@ -203,7 +209,7 @@ Return ONLY valid JSON.`;
       if (dashscope) {
         try {
           const response = await dashscope.chat.completions.create({
-            model: 'qwen-max',
+            model: 'qwen3.6-plus',
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: userMessage },
@@ -212,7 +218,7 @@ Return ONLY valid JSON.`;
             max_tokens: 4000,
           });
           content = response.choices[0]?.message?.content || '';
-          usedModel = 'qwen-max';
+          usedModel = 'qwen3.6-plus';
         } catch (dsError) {
           logger.warn({ error: dsError }, '⚠️ DashScope planning failed, falling back to Anthropic');
         }
@@ -242,7 +248,13 @@ Return ONLY valid JSON.`;
         }
       }
 
-      const plan = JSON.parse(content) as ProjectPlan;
+      // Clean markdown fences if the model wrapped JSON
+      let cleanPlanContent = (content || '').trim();
+      if (cleanPlanContent.startsWith('```')) {
+        cleanPlanContent = cleanPlanContent.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+      }
+
+      const plan = JSON.parse(cleanPlanContent) as ProjectPlan;
 
       // Cache for 1h
       await getCache().set(cacheKey, plan, config.cache.ttl.plan);
@@ -280,36 +292,56 @@ export class DecisionEngine {
     let estimatedCost = 0.002;
     let reasoning = '';
 
-    // ── Code generation routing ─────────────────────────────────
-    // PRIMARY: qwen3-coder-480b for ALL code files (480B params!)
+    // ── Multi-Model Specialization Strategy ───────────────────────
+    // Each model has a precise role in the pipeline:
+    // 
+    // CLASSIFICATION:  qwen-turbo (fastest, cheapest, perfect for JSON extraction)
+    // PLANNING:        qwen3.6-plus (smart planning, good cost/quality ratio)
+    // CODE GEN:        qwen3-coder-480b (480B params, code-specialized beast)
+    // COMPLEX CODE:    qwen3-max (best reasoning for complex logic)
+    // BACKUP CODE:     qwen3-coder-plus (solid code gen, cheaper than 480b)
+    // REVIEW:          qwen3.6-plus (smart reviewer, balanced)
+    // AUTO-HEAL:       qwen3.6-flash (ultra fast first-pass healing)
+    // CONFIG/STYLE:    qwen-turbo (fastest for trivial files)
+    // VISUAL:          qwen-vl-max (vision model for design screenshots)
+    
     if (fileSpec.type === 'component' || fileSpec.type === 'page') {
-      // React/Vue components and pages → use the beast
-      model = 'qwen3-coder-480b';
-      estimatedCost = 0.002;
-      reasoning = 'Component/Page → qwen3-coder-480b (480B code-specialized)';
-    } else if (fileSpec.type === 'api') {
       if (classification.complexity === 'complex') {
-        // Complex API → best reasoning model
-        model = 'qwen-max';
-        estimatedCost = 0.004;
-        reasoning = 'Complex API → qwen-max (best reasoning)';
+        // Complex React/Vue pages → best reasoning
+        model = 'qwen3-max';
+        estimatedCost = 0.003;
+        reasoning = 'Complex Page → qwen3-max (advanced reasoning)';
       } else {
+        // Standard components → code-specialized beast
         model = 'qwen3-coder-480b';
         estimatedCost = 0.002;
-        reasoning = 'Standard API → qwen3-coder-480b (code-specialized)';
+        reasoning = 'Component → qwen3-coder-480b (480B code-specialized)';
       }
-    } else if (fileSpec.type === 'config' || fileSpec.type === 'style') {
-      // Config/style → fastest cheapest
+    } else if (fileSpec.type === 'api') {
+      if (classification.complexity === 'complex') {
+        model = 'qwen3-max';
+        estimatedCost = 0.003;
+        reasoning = 'Complex API → qwen3-max (best reasoning)';
+      } else {
+        model = 'qwen3-coder-plus';
+        estimatedCost = 0.001;
+        reasoning = 'Standard API → qwen3-coder-plus (code-specialized)';
+      }
+    } else if (fileSpec.type === 'config') {
+      // Config files → fastest cheapest
       model = 'qwen-turbo';
-      estimatedCost = 0.0003;
-      reasoning = 'Config/Style → qwen-turbo (fastest)';
+      estimatedCost = 0.0002;
+      reasoning = 'Config → qwen-turbo (fastest, cheapest)';
+    } else if (fileSpec.type === 'style') {
+      // Styles → fast but decent quality
+      model = 'qwen3.6-flash';
+      estimatedCost = 0.0001;
+      reasoning = 'Style → qwen3.6-flash (fast, good quality)';
     } else if (classification.complexity === 'complex') {
-      // Complex other files → qwen-max for reasoning
-      model = 'qwen-max';
-      estimatedCost = 0.004;
-      reasoning = 'Complex file → qwen-max (advanced reasoning)';
+      model = 'qwen3-coder-plus';
+      estimatedCost = 0.001;
+      reasoning = 'Complex file → qwen3-coder-plus (solid backup)';
     } else {
-      // Default → 480B code model
       model = 'qwen3-coder-480b';
       estimatedCost = 0.002;
       reasoning = 'Standard → qwen3-coder-480b (code-specialized)';
@@ -338,13 +370,15 @@ export class DecisionEngine {
    */
   getRoleModel(role: 'classifier' | 'planner' | 'generator' | 'reviewer' | 'healer' | 'summarizer' | 'visual'): string {
     const roleModelMap: Record<string, string> = {
-      classifier: 'qwen3.6-plus',     // Smart + fast for classification
-      planner: 'qwen-max',            // Best reasoning for architecture
-      generator: 'qwen3-coder-480b',  // 480B code-specialized monster
-      reviewer: 'qwen3.6-plus',       // Smart reviewer
+      classifier: 'qwen-turbo',       // Fastest + cheapest, perfect for JSON extraction
+      planner: 'qwen3.6-plus',       // Smart planning, good cost/quality ratio
+      generator: 'qwen3-coder-480b',  // 480B code-specialized beast
+      reviewer: 'qwen3.6-plus',       // Smart reviewer, balanced
       healer: 'qwen3.6-flash',        // Ultra fast first-pass healing
       summarizer: 'qwen3-32b',        // Good compression for context
       visual: 'qwen-vl-max',          // Vision model for design
+      architect: 'qwen3-max',          // Best reasoning for complex architecture
+      backup: 'qwen3-coder-plus',     // Solid code gen backup
     };
     return roleModelMap[role] || 'qwen3.6-plus';
   }

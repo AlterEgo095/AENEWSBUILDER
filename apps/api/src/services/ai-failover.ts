@@ -140,7 +140,7 @@ export const MODEL_REGISTRY: Record<string, AIModel> = {
   'qwen-turbo': {
     provider: AIProvider.DASHSCOPE,
     name: 'qwen-turbo',
-    maxTokens: 131072,
+    maxTokens: 8192,
     costPer1kTokens: { input: 0.00012, output: 0.00036 },
     tier: 'fast',
   },
@@ -154,7 +154,7 @@ export const MODEL_REGISTRY: Record<string, AIModel> = {
   'qwen-max': {
     provider: AIProvider.DASHSCOPE,
     name: 'qwen-max',
-    maxTokens: 32768,
+    maxTokens: 8192,
     costPer1kTokens: { input: 0.0012, output: 0.0036 },
     tier: 'advanced',
   },
