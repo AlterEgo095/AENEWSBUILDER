@@ -15,8 +15,13 @@ export async function initRedis(): Promise<Redis> {
     return redisClient;
   }
 
+  // Parse URL to extract host/port; password comes from URL already (avoid double-auth)
+  const parsedUrl = new URL(config.redis.url);
+  const redisPassword = config.redis.password || (parsedUrl.password || undefined);
+
   redisClient = new Redis(config.redis.url, {
-    password: config.redis.password,
+    // Only pass password explicitly if URL does not contain one
+    ...(parsedUrl.password ? {} : { password: redisPassword }),
     maxRetriesPerRequest: null, // Required by BullMQ
     enableReadyCheck: true,
     lazyConnect: false,
