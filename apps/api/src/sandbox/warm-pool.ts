@@ -719,7 +719,7 @@ export class SandboxWarmPool extends EventEmitter {
     logger.info(`[WarmPool] Warming ${toAdd} containers`);
 
     const promises = Array.from({ length: toAdd }, () =>
-      this.createContainer({ template: 'node', networkMode: 'none' })
+      this.createContainer({ template: 'node', networkMode: 'none', timeout: 300000 })
     );
 
     await Promise.allSettled(promises);
@@ -735,7 +735,7 @@ export class SandboxWarmPool extends EventEmitter {
       template: config.template,
       memory: config.memory || '512m',
       cpus: config.cpus || 0.5,
-      timeout: config.timeout || 30000,
+      timeout: config.timeout || 300000,
       networkMode: config.networkMode || 'none',
       labels: {
         'aenews.pool-id': id,
