@@ -466,10 +466,22 @@ export class SandboxWarmPool extends EventEmitter {
             this.warmPool();
           }
         } catch (error: any) {
-          logger.error('[WarmPool] Memory check failed', {
+          logger.warn('[WarmPool] Memory check failed - removing stale container', {
             containerId: instance.containerId,
             error: error.message,
           });
+          // Remove stale container from pool and trigger re-warming
+          try {
+            this.pool.delete(instance.id);
+            logger.info('[WarmPool] Removed stale entry, re-warming pool', {
+              containerId: instance.containerId.substring(0, 12),
+            });
+            this.warmPool();
+          } catch (cleanupErr: any) {
+            logger.error('[WarmPool] Failed to clean up stale entry', {
+              error: cleanupErr.message,
+            });
+          }
         }
       }
     }, 30000);

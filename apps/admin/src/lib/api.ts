@@ -203,11 +203,11 @@ class ApiClient {
 
   // MCP Tools
   async getMCPTools() {
-    return this.get<any[]>('/admin/mcp');
+    return this.get<any[]>('/admin/mcp/tools');
   }
 
   async toggleMCPTool(id: string, enabled: boolean) {
-    return this.put<ApiResponse<void>>(`/admin/mcp/${id}`, { enabled });
+    return this.put<ApiResponse<void>>(`/admin/mcp/tools/${id}`, { enabled });
   }
 }
 
