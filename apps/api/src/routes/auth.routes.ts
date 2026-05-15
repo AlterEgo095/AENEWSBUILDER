@@ -218,4 +218,47 @@ export async function authRoutes(app: FastifyInstance) {
       data: dbUser,
     });
   });
+
+  // Refresh token
+  app.post('/refresh', {
+    onRequest: [(app as any).authenticate],
+  }, async (request, reply) => {
+    try {
+      const user = request.user as any;
+      const dbUser = await prisma.user.findUnique({
+        where: { id: user.id },
+        select: { id: true, email: true, name: true, role: true, createdAt: true },
+      });
+      if (!dbUser) {
+        return reply.status(401).send({ success: false, error: 'User not found' });
+      }
+      const redis = getRedis();
+      const banned = await redis.get(`user:banned:${user.id}`);
+      if (banned) {
+        return reply.status(403).send({ success: false, error: 'Account is banned' });
+      }
+      const token = app.jwt.sign({ sub: dbUser.id, email: dbUser.email });
+      return reply.send({ success: true, data: { token, user: dbUser } });
+    } catch (error: any) {
+      request.log.error({ error }, 'Token refresh failed');
+      return reply.status(401).send({ success: false, error: 'Token refresh failed' });
+    }
+  });
+
+  // Logout (revoke token)
+  app.post('/logout', {
+    onRequest: [(app as any).authenticate],
+  }, async (request, reply) => {
+    try {
+      const user = request.user as any;
+      const decoded = await request.jwtDecode();
+      const redis = getRedis();
+      const ttl = decoded.exp ? Math.max(0, decoded.exp - Math.floor(Date.now() / 1000)) : 86400;
+      await redis.setex(`revoked:token:${decoded.jti || user.id}`, ttl, '1');
+      return reply.send({ success: true, message: 'Logged out successfully' });
+    } catch {
+      return reply.send({ success: true, message: 'Logged out' });
+    }
+  });
+
 }

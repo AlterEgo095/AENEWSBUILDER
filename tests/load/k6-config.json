@@ -1,0 +1,159 @@
+{
+  "baseUrl": "http://localhost:3181",
+  "apiPrefix": "/api",
+  "timeouts": {
+    "connect": 5000,
+    "response": 10000,
+    "pipelineComplete": 120000
+  },
+  "thresholds": {
+    "p95Latency": 2000,
+    "p99Latency": 5000,
+    "errorRate": 0.05,
+    "stressErrorRate": 0.15
+  },
+  "testUsers": {
+    "admin": {
+      "email": "admin@aenews.net",
+      "password": "AdminLoadTest2026!"
+    },
+    "template": {
+      "email": "loadtest-{id}@aenews.net",
+      "password": "LoadTest2026!"
+    }
+  },
+  "stages": {
+    "smoke": {
+      "vus": 1,
+      "duration": "30s"
+    },
+    "load": {
+      "warmup": {
+        "duration": "30s",
+        "target": 20
+      },
+      "ramp": {
+        "duration": "2m",
+        "target": 100
+      },
+      "sustain": {
+        "duration": "2m",
+        "target": 100
+      },
+      "cooldown": {
+        "duration": "30s",
+        "target": 0
+      }
+    },
+    "stress": [
+      {
+        "duration": "2m",
+        "target": 100
+      },
+      {
+        "duration": "2m",
+        "target": 1000
+      },
+      {
+        "duration": "2m",
+        "target": 5000
+      },
+      {
+        "duration": "2m",
+        "target": 10000
+      },
+      {
+        "duration": "5m",
+        "target": 0
+      }
+    ],
+    "spike": [
+      {
+        "duration": "10s",
+        "target": 0
+      },
+      {
+        "duration": "5s",
+        "target": 10000
+      },
+      {
+        "duration": "30s",
+        "target": 10000
+      },
+      {
+        "duration": "30s",
+        "target": 0
+      },
+      {
+        "duration": "30s",
+        "target": 100
+      },
+      {
+        "duration": "30s",
+        "target": 0
+      }
+    ],
+    "soak": {
+      "rampUp": {
+        "duration": "2m",
+        "target": 1000
+      },
+      "sustain": {
+        "duration": "56m",
+        "target": 1000
+      },
+      "cooldown": {
+        "duration": "2m",
+        "target": 0
+      }
+    },
+    "pipeline": {
+      "stages": [
+        {
+          "duration": "30s",
+          "target": 200
+        },
+        {
+          "duration": "1m",
+          "target": 500
+        },
+        {
+          "duration": "1m",
+          "target": 1000
+        },
+        {
+          "duration": "3m",
+          "target": 1000
+        },
+        {
+          "duration": "30s",
+          "target": 0
+        }
+      ]
+    }
+  },
+  "aiPipelineStates": [
+    "INIT",
+    "CLASSIFYING",
+    "PLANNING",
+    "MCP_EXECUTING",
+    "GENERATING",
+    "REVIEWING",
+    "COMPLETE",
+    "FAILED"
+  ],
+  "endpoints": {
+    "health": "/api/health",
+    "authLogin": "/api/auth/login",
+    "authRegister": "/api/auth/register",
+    "authVerify": "/api/auth/verify",
+    "authMe": "/api/auth/me",
+    "createProject": "/api/projects",
+    "getProject": "/api/projects/{id}",
+    "listProjects": "/api/projects",
+    "adminDashboard": "/api/admin/dashboard",
+    "adminUsers": "/api/admin/users",
+    "securityScan": "/api/engine/security/scan",
+    "contextSimilar": "/api/engine/context/similar"
+  }
+}

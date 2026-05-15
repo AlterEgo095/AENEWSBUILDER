@@ -256,6 +256,46 @@ export const MODEL_REGISTRY: Record<string, AIModel> = {
 };
 
 // ═══════════════════════════════════════════════════════════════
+// 🔧 MODEL NAME RESOLVER — Always resolve registry key → actual API name
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * CRITICAL FIX: Resolve a model registry key to its actual API name.
+ * Before ANY API call, always use: resolveModelName(modelId)
+ * Example: 'qwen3-coder-480b' → 'qwen3-coder-480b-a35b-instruct'
+ */
+export function resolveModelName(modelId: string): string {
+  const registry = MODEL_REGISTRY[modelId];
+  if (registry?.name) {
+    return registry.name;
+  }
+  // If not in registry, return as-is (might be a direct API name already)
+  return modelId;
+}
+
+/**
+ * Get model metadata from registry. Returns null if not found.
+ */
+export function getModelInfo(modelId: string): AIModel | null {
+  return MODEL_REGISTRY[modelId] || null;
+}
+
+/**
+ * Check if a model requires special parameters (e.g., enable_thinking: false)
+ */
+export function getModelSpecialParams(modelId: string): Record<string, any> {
+  const params: Record<string, any> = {};
+  const actualName = resolveModelName(modelId);
+  
+  // qwen3-235b-a22b requires enable_thinking: false for non-streaming calls
+  if (actualName === 'qwen3-235b-a22b') {
+    params.enable_thinking = false;
+  }
+  
+  return params;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // 🔄 MODEL ROTATION POOLS (load-balanced per tier)
 // ═══════════════════════════════════════════════════════════════
 
@@ -612,7 +652,7 @@ export class AIFailoverEngine {
   // Default cascade: DashScope fast → OpenAI fast → Claude fast → escalate
   private readonly DEFAULT_CASCADE: FailoverConfig = {
     primary: 'qwen-turbo',
-    fallbacks: ['qwen-plus', 'qwen-coder-plus', 'qwen-vl-plus', 'qwen-max'],
+    fallbacks: ['qwen-plus', 'qwen-coder-plus', 'qwen3-coder-plus', 'qwen3.6-plus', 'qwen-max'],
     maxRetries: 4,
     retryDelay: 2000,
     timeout: 30000,
@@ -755,8 +795,9 @@ export class AIFailoverEngine {
    */
   private async executeOpenAI(model: AIModel, request: AIRequest): Promise<Omit<AIResponse, 'latency' | 'attempt'>> {
     if (!this.openai) throw new Error('OpenAI not configured');
+    const actualModelName = resolveModelName(model.name);
     const response = await this.openai.chat.completions.create({
-      model: model.name,
+      model: actualModelName,
       messages: request.messages as any,
       temperature: request.temperature || 0.7,
       max_tokens: request.maxTokens || 4000,
@@ -779,8 +820,9 @@ export class AIFailoverEngine {
    */
   private async executeClaude(model: AIModel, request: AIRequest): Promise<Omit<AIResponse, 'latency' | 'attempt'>> {
     if (!this.anthropic) throw new Error('Anthropic not configured');
+    const actualModelName = resolveModelName(model.name);
     const response = await this.anthropic.messages.create({
-      model: model.name,
+      model: actualModelName,
       max_tokens: request.maxTokens || 4000,
       temperature: request.temperature || 0.7,
       messages: request.messages.map((msg) => ({
@@ -809,11 +851,18 @@ export class AIFailoverEngine {
       throw new Error('DashScope client not initialized — check DASHSCOPE_API_KEY');
     }
 
+    // CRITICAL FIX: Always use resolveModelName to get the actual API model name
+    const actualModelName = resolveModelName(model.name);
+    
+    // Get special parameters for this model (e.g., enable_thinking: false)
+    const specialParams = getModelSpecialParams(model.name);
+
     const response = await this.dashscope.chat.completions.create({
-      model: model.name,
+      model: actualModelName,
       messages: request.messages as any,
       temperature: request.temperature || 0.7,
       max_tokens: request.maxTokens || 4000,
+      ...specialParams,
     });
 
     const inputTokens = response.usage?.prompt_tokens || 0;

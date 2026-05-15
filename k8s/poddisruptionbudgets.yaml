@@ -1,0 +1,60 @@
+# Centralized PDBs for stateful services
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgres-pdb
+  namespace: aenews-builder
+  labels:
+    app: postgres
+    component: database
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: postgres
+      component: database
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-master-pdb
+  namespace: aenews-builder
+  labels:
+    app: redis
+    component: master
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: redis
+      component: master
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-sentinel-pdb
+  namespace: aenews-builder
+  labels:
+    app: redis
+    component: sentinel
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: redis
+      component: sentinel
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: prometheus-pdb
+  namespace: aenews-builder
+  labels:
+    app: prometheus
+    component: monitoring
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: prometheus
+      component: monitoring

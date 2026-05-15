@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: worker-pdb
+  namespace: aenews-builder
+  labels:
+    app: worker
+    component: backend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: worker
+      component: backend

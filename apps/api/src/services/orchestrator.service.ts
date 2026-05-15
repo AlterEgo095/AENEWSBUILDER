@@ -8,6 +8,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/env.js';
 import { CacheService } from './redis.service.js';
 import { logger } from '../config/logger.js';
+import { resolveModelName, getModelSpecialParams } from './ai-failover.js';
 
 const openai: OpenAI | null = config.openai.enabled ? new OpenAI({ apiKey: config.openai.apiKey }) : null;
 const anthropic: Anthropic | null = config.anthropic.enabled ? new Anthropic({ apiKey: config.anthropic.apiKey }) : null;
@@ -108,8 +109,10 @@ Return ONLY valid JSON, no explanations.`;
       // Try DashScope first (cheapest and fastest)
       if (dashscope) {
         try {
+          const classifierModel = resolveModelName('qwen-turbo');
+          const specialParams = getModelSpecialParams('qwen-turbo');
           const response = await dashscope.chat.completions.create({
-            model: 'qwen-turbo',
+            model: classifierModel,
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: prompt },
@@ -117,6 +120,7 @@ Return ONLY valid JSON, no explanations.`;
             temperature: 0.3,
             max_tokens: 500,
             response_format: { type: 'json_object' },
+            ...specialParams,
           });
           content = response.choices[0]?.message?.content || '';
           usedModel = 'qwen-turbo';
@@ -208,14 +212,17 @@ Return ONLY valid JSON.`;
       // Try DashScope qwen-plus first (good quality, lower cost)
       if (dashscope) {
         try {
+          const plannerModel = resolveModelName('qwen3.6-plus');
+          const specialParams = getModelSpecialParams('qwen3.6-plus');
           const response = await dashscope.chat.completions.create({
-            model: 'qwen3.6-plus',
+            model: plannerModel,
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: userMessage },
             ],
             temperature: 0.2,
             max_tokens: 4000,
+            ...specialParams,
           });
           content = response.choices[0]?.message?.content || '';
           usedModel = 'qwen3.6-plus';

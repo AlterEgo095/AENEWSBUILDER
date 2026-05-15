@@ -36,7 +36,7 @@ export interface ProjectJobResult {
   };
 }
 
-const QUEUE_NAME = 'project:generate';
+const QUEUE_NAME = 'project-generate';
 
 class ProjectGenerationQueue {
   private queue;

@@ -1,0 +1,158 @@
+groups:
+  - name: infrastructure
+    rules:
+      # CPU Alerts
+      - alert: HighCPUUsage
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value }}% (threshold: 80%)"
+
+      - alert: CriticalCPUUsage
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 95
+        for: 2m
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "Critical CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value }}% (threshold: 95%)"
+
+      # Memory Alerts
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value }}% (threshold: 85%)"
+
+      - alert: CriticalMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 95
+        for: 2m
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "Critical memory usage on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value }}% (threshold: 95%)"
+
+      # Disk Alerts
+      - alert: HighDiskUsage
+        expr: (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|nsfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|nsfs|overlay"})) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "High disk usage on {{ $labels.instance }} {{ $labels.mountpoint }}"
+          description: "Disk usage is {{ $value }}% (threshold: 85%)"
+
+      - alert: CriticalDiskUsage
+        expr: (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|nsfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|nsfs|overlay"})) * 100 > 95
+        for: 5m
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "Critical disk usage on {{ $labels.instance }} {{ $labels.mountpoint }}"
+          description: "Disk usage is {{ $value }}% (threshold: 95%)"
+
+      # Disk I/O Alerts
+      - alert: HighDiskIOWait
+        expr: rate(node_cpu_seconds_total{mode="iowait"}[5m]) * 100 > 20
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "High disk I/O wait on {{ $labels.instance }}"
+          description: "I/O wait is {{ $value }}% (threshold: 20%)"
+
+      # Redis Alerts
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "Redis instance is down"
+          description: "Redis exporter cannot connect to Redis instance"
+
+      - alert: RedisHighMemory
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "Redis memory usage high"
+          description: "Redis is using {{ $value | humanizePercentage }} of max memory"
+
+      - alert: RedisReplicationLag
+        expr: redis_replication_offset_diff_seconds > 10
+        for: 3m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "Redis replication lag detected"
+          description: "Replication lag is {{ $value }}s"
+
+      - alert: RedisTooManyConnections
+        expr: redis_connected_clients > 200
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "Redis has too many connections"
+          description: "Redis has {{ $value }} connected clients (threshold: 200)"
+
+      # PostgreSQL Alerts
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL exporter cannot connect to the database"
+
+      - alert: PostgresTooManyConnections
+        expr: pg_stat_activity_count > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "PostgreSQL has too many connections"
+          description: "PostgreSQL has {{ $value }} active connections"
+
+      - alert: PostgresReplicationLag
+        expr: pg_replication_lag > 10
+        for: 3m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "PostgreSQL replication lag detected"
+          description: "Replication lag is {{ $value }}s"
+
+      - alert: PostgresDeadTuples
+        expr: pg_stat_user_tables_n_dead_tup > 100000
+        for: 30m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "High dead tuples in PostgreSQL"
+          description: "Table has {{ $value }} dead tuples, autovacuum may need tuning"

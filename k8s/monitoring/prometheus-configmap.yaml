@@ -1,0 +1,95 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: aenews-builder
+  labels:
+    app: prometheus
+    component: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      scrape_timeout: 10s
+
+    scrape_configs:
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - aenews-builder
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\\d+)?;(\\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: kubernetes_pod_name
+
+      - job_name: 'kubernetes-services'
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - aenews-builder
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+
+    rule_files:
+      - /etc/prometheus/rules/*.yml
+
+  alert_rules.yml: |
+    groups:
+      - name: aenews-builder-alerts
+        rules:
+          - alert: HighCPUUsage
+            expr: sum(rate(container_cpu_usage_seconds_total{namespace="aenews-builder"}[5m])) by (pod) / sum(container_spec_cpu_quota{namespace="aenews-builder"} / container_spec_cpu_period{namespace="aenews-builder"}) by (pod) > 0.8
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High CPU usage on {{ $labels.pod }}"
+              description: "CPU usage is above 80% for 5 minutes"
+
+          - alert: HighMemoryUsage
+            expr: container_memory_working_set_bytes{namespace="aenews-builder"} / container_spec_memory_limit_bytes{namespace="aenews-builder"} > 0.85
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High memory usage on {{ $labels.pod }}"
+              description: "Memory usage is above 85% for 5 minutes"
+
+          - alert: PodCrashLooping
+            expr: rate(kube_pod_container_status_restarts_total{namespace="aenews-builder"}[15m]) > 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Pod {{ $labels.pod }} is crash looping"
+
+          - alert: RedisMasterDown
+            expr: redis_master_up{namespace="aenews-builder"} == 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Redis master is down"

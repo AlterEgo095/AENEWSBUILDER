@@ -1,0 +1,119 @@
+groups:
+  - name: application
+    rules:
+      # API Error Rate
+      - alert: HighAPIErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) * 100 > 5
+        for: 3m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "High API error rate (5xx)"
+          description: "API 5xx error rate is {{ $value }}% (threshold: 5%)"
+
+      - alert: CriticalAPIErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) * 100 > 15
+        for: 2m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "Critical API error rate (5xx)"
+          description: "API 5xx error rate is {{ $value }}% (threshold: 15%)"
+
+      # API Latency
+      - alert: HighAPILatencyP95
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "High API latency P95"
+          description: "API P95 latency is {{ $value }}s (threshold: 2s)"
+
+      - alert: CriticalAPILatencyP95
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 10
+        for: 3m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "Critical API latency P95"
+          description: "API P95 latency is {{ $value }}s (threshold: 10s)"
+
+      # Queue Depth
+      - alert: HighQueueDepth
+        expr: bullmq_queue_depth > 100
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "High queue depth"
+          description: "Queue {{ $labels.queue }} has {{ $value }} pending jobs (threshold: 100)"
+
+      - alert: CriticalQueueDepth
+        expr: bullmq_queue_depth > 500
+        for: 5m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "Critical queue depth"
+          description: "Queue {{ $labels.queue }} has {{ $value }} pending jobs (threshold: 500)"
+
+      # Queue Processing Time
+      - alert: SlowQueueProcessing
+        expr: bullmq_queue_processing_duration_seconds > 60
+        for: 10m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Slow queue processing"
+          description: "Queue {{ $labels.queue }} average processing time is {{ $value }}s"
+
+      # JWT Auth Failures
+      - alert: HighAuthFailureRate
+        expr: rate(auth_failures_total[5m]) > 10
+        for: 3m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "High authentication failure rate"
+          description: "Authentication failures at {{ $value }}/s - possible brute force attack"
+
+      # Execution Service
+      - alert: ExecutionServiceDown
+        expr: up{job="execution-service"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "Execution service is down"
+          description: "Execution service has been unreachable for 2 minutes"
+
+      - alert: HighContainerErrorRate
+        expr: rate(exec_containers_errors_total[5m]) / rate(exec_containers_created_total[5m]) * 100 > 10
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "High container creation error rate"
+          description: "Container creation error rate is {{ $value }}%"
+
+      # API Rate Limiting
+      - alert: RateLimitTriggered
+        expr: rate(rate_limit_exceeded_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: info
+          team: backend
+        annotations:
+          summary: "Rate limits being triggered frequently"
+          description: "Rate limit exceeded {{ $value }} times/s on {{ $labels.endpoint }}"

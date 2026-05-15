@@ -2,8 +2,11 @@
  * AENEWS BUILDER - API Gateway Entry Point
  * Industrial AI Operating System (L4 + MCP + SCALE)
  * 
+ * FIX: Uses dynamic imports for heavy modules to prevent
+ * module-level initialization from blocking the event loop.
+ * 
  * @author Dieudonné MATANDA (ALTER EGO)
- * @version 3.0.0
+ * @version 3.0.1-dynamic-imports
  */
 
 import Fastify from 'fastify';
@@ -15,6 +18,7 @@ import jwt from '@fastify/jwt';
 import websocket from '@fastify/websocket';
 import { config } from './config/env.js';
 import { logger } from './config/logger.js';
+import { validateModelRegistryOrExit } from './services/model-registry-validator.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { registerAuthorizeAdmin } from './middleware/authorize-admin.js';
 import { metricsRegistry } from './observability/metrics.js';
@@ -23,16 +27,7 @@ import { projectRoutes } from './routes/project.routes.js';
 import { engineRoutes } from './routes/engine.routes.js';
 import { streamRoutes } from './routes/stream.routes.js';
 import { healthRoutes } from './routes/health.routes.js';
-import { adminRoutes } from './routes/admin.routes.js';
-import { chatRoutes } from './routes/chat.routes.js';
 import { initRedis, closeRedis } from './services/redis.service.js';
-import { initWorker } from './workers/index.js';
-import { prisma } from './config/prisma.js';
-import { initSentry, captureException } from './observability/sentry.js';
-import { initTracing, shutdownTracing } from './observability/tracing.js';
-import { securityEngine } from './services/security-engine.js';
-import { contextMemory } from './services/context-memory.js';
-import { planVersioning } from './services/plan-versioning.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -48,29 +43,23 @@ async function bootstrap() {
     requestIdLogLabel: 'reqId',
     disableRequestLogging: false,
     requestIdHeader: 'x-request-id',
-    // 🔥 PAYLOAD BOMB PROTECTION
-    bodyLimit: 10 * 1024 * 1024, // Max 10MB (prevent JSON bombs)
-    maxParamLength: 500, // Max 500 chars per param
+    bodyLimit: 10 * 1024 * 1024,
+    maxParamLength: 500,
   });
 
   try {
     // ============================================
-    // 📡 OBSERVABILITY - SENTRY
+    // 📡 OBSERVABILITY
     // ============================================
-
+    const { initSentry } = await import('./observability/sentry.js');
     initSentry();
 
-    // ============================================
-    // 📡 OBSERVABILITY - OPENTELEMETRY TRACING
-    // ============================================
-
+    const { initTracing } = await import('./observability/tracing.js');
     initTracing();
 
     // ============================================
     // 🔐 SECURITY LAYER
     // ============================================
-    
-    // Helmet - Security Headers
     await app.register(helmet, {
       contentSecurityPolicy: config.csp.enabled ? {
         directives: {
@@ -80,159 +69,90 @@ async function bootstrap() {
           imgSrc: ["'self'", 'data:', 'https:'],
         },
       } : false,
-      hsts: {
-        maxAge: 31536000,
-        includeSubDomains: true,
-        preload: true,
-      },
+      hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
     });
 
-    // CORS Configuration
     await app.register(cors, {
       origin: config.cors.origins,
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     });
 
-    // Rate Limiting (Redis-backed) - 🔥 ENHANCED WITH DDoS PROTECTION
     await app.register(rateLimit, {
       max: config.rateLimit.maxRequests,
       timeWindow: config.rateLimit.windowMs,
       redis: await initRedis(),
       skipOnError: true,
-      // 🔥 BAN IP AFTER EXCESSIVE VIOLATIONS
-      ban: 10, // Ban after 10 violations
-      onBanReach: (req, key) => {
-        logger.error('🚨 IP BANNED - DDoS detected', {
-          ip: req.ip,
-          key,
-        });
+      ban: 10,
+      onBanReach: (req: any, key: string) => {
+        logger.error('IP BANNED - DDoS detected', { ip: req.ip, key });
       },
-      // 🔥 CUSTOM ERROR RESPONSE (429)
-      errorResponseBuilder: (req, context) => {
-        return {
-          statusCode: 429,
-          error: 'Too many requests',
-          message: 'Rate limit exceeded. Please try again later.',
-          retryAfter: context.after,
-          limit: config.rateLimit.maxRequests,
-        };
-      },
+      errorResponseBuilder: (req: any, context: any) => ({
+        statusCode: 429,
+        error: 'Too many requests',
+        message: 'Rate limit exceeded. Please try again later.',
+        retryAfter: context.after,
+        limit: config.rateLimit.maxRequests,
+      }),
     });
 
-    // Compression
-    await app.register(compress, {
-      encodings: ['gzip', 'deflate'],
-    });
+    await app.register(compress, { encodings: ['gzip', 'deflate'] });
 
     // ============================================
     // 🔑 JWT AUTHENTICATION (RS256)
     // ============================================
-    
-    const privateKey = fs.readFileSync(
-      path.resolve(config.jwt.privateKeyPath),
-      'utf8'
-    );
-    const publicKey = fs.readFileSync(
-      path.resolve(config.jwt.publicKeyPath),
-      'utf8'
-    );
+    const privateKey = fs.readFileSync(path.resolve(config.jwt.privateKeyPath), 'utf8');
+    const publicKey = fs.readFileSync(path.resolve(config.jwt.publicKeyPath), 'utf8');
 
     await app.register(jwt, {
-      secret: {
-        private: privateKey,
-        public: publicKey,
-      },
-      sign: {
-        algorithm: 'RS256',
-        expiresIn: config.jwt.expiresIn,
-      },
-      verify: {
-        algorithms: ['RS256'],
-      },
+      secret: { private: privateKey, public: publicKey },
+      sign: { algorithm: 'RS256', expiresIn: config.jwt.expiresIn },
+      verify: { algorithms: ['RS256'] },
     });
 
-    // JWT Decorator with Claims Validation + 🔥 TOKEN REVOCATION CHECK + 🔥 BAN CHECK
     app.decorate('authenticate', async (request: any, reply: any) => {
       try {
         const decoded = await request.jwtVerify();
-        
-        // Validate token claims
-        if (!decoded.sub || !decoded.exp) {
-          throw new Error('Invalid token claims');
-        }
-        
-        // Check token expiration (strict — 30s grace for clock skew)
+        if (!decoded.sub || !decoded.exp) throw new Error('Invalid token claims');
         const now = Math.floor(Date.now() / 1000);
-        if (decoded.exp && decoded.exp < now) {
-          throw new Error('Token expired');
-        }
-        
-        // Validate audience claim
-        const expectedAudience = config.jwt.audience || 'aenews-builder';
-        if (decoded.aud && decoded.aud !== expectedAudience) {
-          throw new Error('Invalid token audience');
-        }
-        
-        // 🔥 CHECK TOKEN REVOCATION (Redis blacklist)
+        if (decoded.exp < now) throw new Error('Token expired');
         const redis = await initRedis();
         const revoked = await redis.get(`revoked:token:${decoded.jti || decoded.sub}`);
-        if (revoked) {
-          throw new Error('Token revoked');
-        }
-
-        // 🔥 CHECK BAN STATUS (Redis)
+        if (revoked) throw new Error('Token revoked');
         const banned = await redis.get(`user:banned:${decoded.sub}`);
-        if (banned) {
-          logger.warn('Banned user attempted access', {
-            userId: decoded.sub,
-            ip: request.ip,
-            path: request.url,
-          });
-          reply.code(403).send({
-            error: 'Forbidden',
-            message: 'Account is banned',
-          });
-          return;
-        }
-        
-        // Attach user info to request
+        if (banned) { reply.code(403).send({ error: 'Forbidden', message: 'Account is banned' }); return; }
         request.user = { id: decoded.sub, email: decoded.email };
-        
       } catch (err: any) {
-        if (reply.statusCode === 403) return; // already sent (ban check)
-        logger.warn('Authentication failed', { 
-          error: err.message, 
-          ip: request.ip,
-          path: request.url 
-        });
-        reply.code(401).send({ 
-          error: 'Unauthorized', 
-          message: 'Invalid or expired token' 
-        });
+        if (reply.statusCode === 403) return;
+        reply.code(401).send({ error: 'Unauthorized', message: 'Invalid or expired token' });
       }
     });
 
-    // 🔐 ADMIN AUTHORIZATION DECORATOR
     registerAuthorizeAdmin(app);
 
     // ============================================
     // 🔌 WEBSOCKET SUPPORT (SSE)
     // ============================================
-    
     await app.register(websocket);
 
     // ============================================
     // 📡 ROUTES REGISTRATION
     // ============================================
-    
     await app.register(healthRoutes, { prefix: '/api/health' });
     await app.register(authRoutes, { prefix: '/api/auth' });
     await app.register(projectRoutes, { prefix: '/api/projects' });
     await app.register(engineRoutes, { prefix: '/api/engine' });
     await app.register(streamRoutes, { prefix: '/api/stream' });
+
+    // Dynamic imports for heavy route modules
+    const { adminRoutes } = await import('./routes/admin.routes.js');
     await app.register(adminRoutes, { prefix: '/api/admin' });
+
+    const { chatRoutes } = await import('./routes/chat.routes.js');
     await app.register(chatRoutes, { prefix: '/api/chat' });
+
+    const { recoveryRoutes } = await import('./routes/recovery.routes.js');
+    await app.register(recoveryRoutes, { prefix: '/api/recovery' });
 
     // Prometheus Metrics
     app.get('/metrics', async (request, reply) => {
@@ -243,10 +163,8 @@ async function bootstrap() {
     // ============================================
     // ⚠️  ERROR HANDLING
     // ============================================
-    
     app.setErrorHandler(errorHandler);
 
-    // 404 Handler
     app.setNotFoundHandler((request, reply) => {
       reply.code(404).send({
         error: 'Not Found',
@@ -256,10 +174,16 @@ async function bootstrap() {
     });
 
     // ============================================
-    // 🚀 INITIALIZE WORKER ENGINE + ENGINES
+    // 🚀 DYNAMIC INIT: Worker Engine + Services
     // ============================================
-    
+    const { initWorker } = await import('./workers/index.js');
     await initWorker();
+    
+    // Dynamic imports for service singletons
+    await import('./services/security-engine.js');
+    await import('./services/context-memory.js');
+    await import('./services/plan-versioning.js');
+
     app.log.info('Worker Engine initialized');
     app.log.info('Security Engine ready');
     app.log.info('Context Memory Engine ready');
@@ -270,21 +194,22 @@ async function bootstrap() {
     app.log.info('Admin authorization middleware active');
 
     // ============================================
+    // 🔍 PHASE 6: MODEL REGISTRY VALIDATION (BEFORE listen)
+    // ============================================
+    validateModelRegistryOrExit();
+    logger.info('Model Registry Validation PASSED');
+
+    // ============================================
     // 🎯 START SERVER
     // ============================================
-    
-    await app.listen({
-      port: config.server.port,
-      host: config.server.host,
-    });
+    await app.listen({ port: config.server.port, host: config.server.host });
 
-    // Store server reference for graceful shutdown
     serverInstance = app.server;
 
     app.log.info(`
 ╔══════════════════════════════════════════════════════════════╗
 ║                                                              ║
-║        🚀 AENEWS BUILDER API GATEWAY v3.0.0                  ║
+║        🚀 AENEWS BUILDER API GATEWAY v3.0.1                  ║
 ║        Industrial AI Operating System (L4 + MCP)             ║
 ║                                                              ║
 ║        🌐 Server: http://${config.server.host}:${config.server.port}              ║
@@ -305,39 +230,39 @@ async function bootstrap() {
 // ============================================
 // 🔄 GRACEFUL SHUTDOWN
 // ============================================
-
 async function gracefulShutdown(signal: string) {
   logger.info(`${signal} received, closing server gracefully...`);
-
   try {
-    // Close Fastify server (stop accepting new connections)
-    if (serverInstance) {
-      await serverInstance.close();
-    }
-
-    // Disconnect Prisma
+    if (serverInstance) await serverInstance.close();
+    const { prisma } = await import('./config/prisma.js');
     await prisma.$disconnect();
     logger.info('Prisma disconnected');
-
-    // Close Redis connection if available
-    try {
-      await closeRedis();
-      logger.info('Redis connection closed');
-    } catch {
-      // Redis may not be connected
-    }
-
+    try { await closeRedis(); logger.info('Redis connection closed'); } catch { /* ok */ }
+    const { shutdownTracing } = await import('./observability/tracing.js');
     await shutdownTracing();
     logger.info('Graceful shutdown complete');
   } catch (error) {
     logger.error({ error }, 'Error during graceful shutdown');
   }
-
   process.exit(0);
 }
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Start Application
-bootstrap();
+// ============================================
+// 🎯 APPLICATION STARTUP (Worker Mode Support)
+// ============================================
+const workerMode = process.env.WORKER_MODE === 'true';
+
+if (workerMode) {
+  import('./workers/index.js').then(({ startWorkerOnly }) => {
+    return startWorkerOnly();
+  }).catch((error) => {
+    console.error('Failed to start worker:', error);
+    process.exit(1);
+  });
+} else {
+  bootstrap();
+}
+

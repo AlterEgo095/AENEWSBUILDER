@@ -933,3 +933,102 @@ export function getProjectQueue(): Queue<ProjectJob> {
   }
   return projectQueue;
 }
+
+
+
+// ============================================
+// 🎯 STANDALONE WORKER MODE (Phase 2)
+// ============================================
+
+/**
+ * Start ONLY BullMQ workers without the Fastify server.
+ * Used by the dedicated worker container (WORKER_MODE=true).
+ */
+export async function startWorkerOnly(): Promise<void> {
+  const workerMode = process.env.WORKER_MODE === 'true';
+  if (!workerMode) {
+    throw new Error('startWorkerOnly() called but WORKER_MODE is not true');
+  }
+
+  logger.info('🔧 Starting in WORKER-ONLY mode (no API server)');
+
+  // Initialize Redis connection
+  const { initRedis } = await import('../services/redis.service.js');
+  const redis = await initRedis();
+  logger.info('Worker: Redis connected');
+
+  // Initialize Prisma
+  const { prisma } = await import('../config/prisma.js');
+  await prisma.$connect();
+  logger.info('Worker: Database connected');
+
+  // Initialize worker engine
+  await initWorker();
+  logger.info('Worker: BullMQ workers started');
+
+  // Initialize engines that workers depend on
+  try {
+    const { securityEngine } = await import('../services/security-engine.js');
+    logger.info('Worker: Security Engine ready');
+  } catch (err: any) {
+    logger.warn({ error: err.message }, 'Worker: Security Engine init skipped');
+  }
+
+  try {
+    const { contextMemory } = await import('../services/context-memory.js');
+    logger.info('Worker: Context Memory Engine ready');
+  } catch (err: any) {
+    logger.warn({ error: err.message }, 'Worker: Context Memory Engine init skipped');
+  }
+
+  try {
+    const { planVersioning } = await import('../services/plan-versioning.js');
+    logger.info('Worker: Plan Versioning Engine ready');
+  } catch (err: any) {
+    logger.warn({ error: err.message }, 'Worker: Plan Versioning Engine init skipped');
+  }
+
+  logger.info(`
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║        🔧 AENEWS BUILDER WORKER (Standalone)                 ║
+║        BullMQ Worker Engine v2.0                              ║
+║                                                              ║
+║        📊 Concurrency: ${process.env.BULLMQ_CONCURRENCY || '5'}                                 ║
+║        🔗 Redis: Sentinel-enabled                             ║
+║        🗄️  Database: Primary + Read Replica                   ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+  `);
+
+  // Graceful shutdown for worker
+  const shutdown = async (signal: string) => {
+    logger.info(`${signal} received, shutting down worker...`);
+    try {
+      if (projectWorker) {
+        await projectWorker.close();
+        logger.info('Worker: BullMQ worker closed');
+      }
+      if (projectQueue) {
+        await projectQueue.close();
+        logger.info('Worker: BullMQ queue closed');
+      }
+      const { closeRedis } = await import('../services/redis.service.js');
+      await closeRedis();
+      logger.info('Worker: Redis disconnected');
+      const { prisma } = await import('../config/prisma.js');
+      await prisma.$disconnect();
+      logger.info('Worker: Database disconnected');
+    } catch (error) {
+      logger.error({ error }, 'Worker: Error during shutdown');
+    }
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  // Keep the process alive
+  logger.info('Worker: Running — waiting for jobs...');
+}
+

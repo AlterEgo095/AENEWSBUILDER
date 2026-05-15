@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: execution-service
+  namespace: aenews-builder
+  labels:
+    app: execution-service
+    component: backend
+    app.kubernetes.io/part-of: aenews-builder
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: execution-service
+      component: backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: execution-service
+        component: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3010"
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - execution-service
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: execution-service
+          image: aenews-builder/execution-service:latest
+          imagePullPolicy: Always
+          securityContext:
+            privileged: true
+          ports:
+            - containerPort: 3010
+              name: http
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: aenews-builder-config
+            - secretRef:
+                name: aenews-builder-secrets
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            - name: docker-lib
+              mountPath: /var/lib/docker
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1"
+      volumes:
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+        - name: docker-lib
+          hostPath:
+            path: /var/lib/docker
+            type: DirectoryOrCreate

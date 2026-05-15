@@ -308,4 +308,28 @@ export const mcpPermissionDenials = new Counter({
   registers: [metricsRegistry],
 });
 
+
+// MCP Parallel Execution Metrics (used by mcp-executor.ts)
+export const mcpToolDuration = new Histogram({
+  name: 'mcp_tool_duration_seconds',
+  help: 'Duration of individual MCP tool executions in seconds',
+  labelNames: ['tool_id'],
+  buckets: [0.5, 1, 2, 5, 10, 20, 30],
+  registers: [metricsRegistry],
+});
+
+export const mcpToolErrors = new Counter({
+  name: 'mcp_tool_errors_total',
+  help: 'Total number of MCP tool execution errors',
+  labelNames: ['tool_id', 'error_type'],
+  registers: [metricsRegistry],
+});
+
+export const mcpParallelExecutions = new Counter({
+  name: 'mcp_parallel_executions_total',
+  help: 'Total number of MCP parallel execution batches',
+  labelNames: ['project_id', 'tool_count'],
+  registers: [metricsRegistry],
+});
+
 logger.info('✅ Prometheus metrics initialized');

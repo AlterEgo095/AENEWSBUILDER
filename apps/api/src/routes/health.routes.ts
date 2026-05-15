@@ -1,11 +1,12 @@
 /**
  * Health Check Routes
- * Real service health checks: Redis, PostgreSQL, BullMQ Queue
+ * Real service health checks: Redis, PostgreSQL (Primary + Replica), BullMQ Queue
+ * Phase 2: Read replica health checks
  */
 
 import type { FastifyInstance } from 'fastify';
 import { getRedis } from '../services/redis.service.js';
-import { prisma } from '../config/prisma.js';
+import { prisma, prismaRead } from '../config/prisma.js';
 import { getProjectQueue } from '../workers/index.js';
 
 export async function healthRoutes(app: FastifyInstance) {
@@ -13,7 +14,7 @@ export async function healthRoutes(app: FastifyInstance) {
     const services: Record<string, string> = {};
     let unhealthy = false;
 
-    // Check Redis
+    // Check Redis (via Sentinel if enabled)
     try {
       const redis = getRedis();
       await redis.ping();
@@ -23,13 +24,22 @@ export async function healthRoutes(app: FastifyInstance) {
       unhealthy = true;
     }
 
-    // Check PostgreSQL (REAL check)
+    // Check PostgreSQL Primary (for writes)
     try {
       await prisma.$queryRaw`SELECT 1`;
       services.database = 'up';
     } catch {
       services.database = 'down';
       unhealthy = true;
+    }
+
+    // Check PostgreSQL Read Replica (for reads)
+    try {
+      await prismaRead.$queryRaw`SELECT 1`;
+      services.database_replica = 'up';
+    } catch {
+      services.database_replica = 'down';
+      // Replica being down is not critical — primary can handle reads
     }
 
     // Check BullMQ Queue
@@ -46,6 +56,12 @@ export async function healthRoutes(app: FastifyInstance) {
     // Always up
     services.api = 'up';
 
+    // Sentinel mode indicator
+    const sentinelEnabled = process.env.REDIS_SENTINEL_ENABLED === 'true';
+    if (sentinelEnabled) {
+      services.redis_mode = 'sentinel';
+    }
+
     const status = unhealthy ? 'unhealthy' : 'healthy';
     const statusCode = unhealthy ? 503 : 200;
 
@@ -61,27 +77,38 @@ export async function healthRoutes(app: FastifyInstance) {
   // Detailed health endpoint (for monitoring)
   app.get('/detailed', async (request, reply) => {
     const startTime = Date.now();
-    const checks: Record<string, { status: string; latency?: number; error?: string }> = {};
+    const checks: Record<string, { status: string; latency?: number; error?: string; mode?: string }> = {};
 
     // Redis latency
     try {
       const redis = getRedis();
       const start = Date.now();
       await redis.ping();
-      checks.redis = { status: 'up', latency: Date.now() - start };
+      const mode = process.env.REDIS_SENTINEL_ENABLED === 'true' ? 'sentinel' : 'direct';
+      checks.redis = { status: 'up', latency: Date.now() - start, mode };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       checks.redis = { status: 'down', error: message };
     }
 
-    // PostgreSQL latency
+    // PostgreSQL Primary latency
     try {
       const start = Date.now();
       await prisma.$queryRaw`SELECT 1`;
-      checks.database = { status: 'up', latency: Date.now() - start };
+      checks.database_primary = { status: 'up', latency: Date.now() - start };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      checks.database = { status: 'down', error: message };
+      checks.database_primary = { status: 'down', error: message };
+    }
+
+    // PostgreSQL Read Replica latency
+    try {
+      const start = Date.now();
+      await prismaRead.$queryRaw`SELECT 1`;
+      checks.database_replica = { status: 'up', latency: Date.now() - start };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      checks.database_replica = { status: 'down', error: message };
     }
 
     // Memory usage
@@ -100,7 +127,9 @@ export async function healthRoutes(app: FastifyInstance) {
         },
         cpu: process.cpuUsage(),
         uptime: process.uptime(),
+        workerMode: process.env.WORKER_MODE === 'true',
       },
     });
   });
 }
+

@@ -7,6 +7,7 @@ import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/env.js';
 import { logger } from '../config/logger.js';
+import { resolveModelName, getModelSpecialParams } from '../services/ai-failover.js';
 
 const openai = new OpenAI({ apiKey: config.openai.apiKey });
 const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
@@ -127,8 +128,10 @@ Return ONLY valid JSON.`;
     let response: string;
 
     if (provider === 'dashscope' && dashscope) {
+      const actualModel = resolveModelName(model);
+      const specialParams = getModelSpecialParams(model);
       const completion = await dashscope.chat.completions.create({
-        model: model,
+        model: actualModel,
         messages: [
           {
             role: 'system',
@@ -142,6 +145,7 @@ Return ONLY valid JSON.`;
         temperature: 0.1,
         max_tokens: 4000,
         response_format: { type: 'json_object' },
+        ...specialParams,
       });
       response = completion.choices[0]?.message?.content || '{}';
     } else if (provider === 'openai') {

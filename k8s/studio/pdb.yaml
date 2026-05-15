@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: studio-pdb
+  namespace: aenews-builder
+  labels:
+    app: studio
+    component: frontend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: studio
+      component: frontend

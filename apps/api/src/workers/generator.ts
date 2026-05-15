@@ -16,7 +16,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import type { FileSpec } from '../services/orchestrator.service.js';
-import { MODEL_REGISTRY, AIProvider, MODEL_ROTATION_POOLS } from '../services/ai-failover.js';
+import { MODEL_REGISTRY, AIProvider, MODEL_ROTATION_POOLS, resolveModelName, getModelSpecialParams } from '../services/ai-failover.js';
 
 // ============================================
 // 🔹 TYPES
@@ -426,12 +426,14 @@ export class Generator {
       throw new Error('DashScope client not initialized');
     }
 
-    // CRITICAL FIX: Resolve registry key to actual DashScope model name
-    // e.g. 'qwen3-coder-480b' -> 'qwen3-coder-480b-a35b-instruct'
-    const registry = MODEL_REGISTRY[model];
-    const actualModel = registry?.name || model;
+    // ═══ CRITICAL FIX v3.0.1: Use centralized resolveModelName + getModelSpecialParams ═══
+    // This ensures qwen3-coder-480b → qwen3-coder-480b-a35b-instruct AND
+    // qwen3-235b-a22b gets enable_thinking: false automatically
+    const actualModel = resolveModelName(model);
+    const specialParams = getModelSpecialParams(model);
 
     // Cap max_tokens to the model's own limit from registry, never exceed it
+    const registry = MODEL_REGISTRY[model];
     const modelMaxTokens = registry?.maxTokens || 8192;
     const maxTokens = Math.min(config.cost.maxTokensPerRequest, modelMaxTokens);
 
@@ -443,6 +445,7 @@ export class Generator {
       ],
       temperature: 0.2,
       max_tokens: maxTokens,
+      ...specialParams,  // Inject enable_thinking: false for qwen3-235b-a22b etc.
     });
 
     return response.choices[0]?.message?.content || '';

@@ -8,12 +8,16 @@
  * The executor uses the MCPAdapter from packages/mcp when available,
  * and falls back to direct HTTP calls for tools that don't have adapters.
  * 
+ * Uses Promise.allSettled() for parallel execution with configurable
+ * concurrency limiting to prevent overwhelming external APIs.
+ * 
  * @author Dieudonné MATANDA (ALTER EGO) — AENEWS UNIVERSEL
- * @version 1.0.0
+ * @version 2.0.0
  */
 
 import axios from 'axios';
 import { logger } from '../config/logger.js';
+import { mcpToolDuration, mcpToolErrors, mcpParallelExecutions } from '../observability/metrics.js';
 
 // ============================================
 // 🔹 TYPES
@@ -43,6 +47,9 @@ export interface MCPToolInvocation {
 
 /** Per-tool timeout in milliseconds */
 const TOOL_TIMEOUT_MS = 30_000;
+
+/** Default max concurrency for parallel tool execution */
+const DEFAULT_MAX_CONCURRENCY = 10;
 
 /** Supported MCP tools and their execution strategies */
 const SUPPORTED_TOOLS: Record<
@@ -92,52 +99,169 @@ const SUPPORTED_TOOLS: Record<
 
 export class MCPExecutor {
   /**
-   * Execute all MCP tools from the plan.
+   * Execute all MCP tools from the plan in PARALLEL using Promise.allSettled().
    * 
    * Tools that fail are recorded with their error but don't block
    * the overall workflow. The generator can use whatever results
    * are available.
    * 
-   * @param projectId  - The project identifier
-   * @param toolIds    - Array of MCP tool names from the plan
-   * @param context    - Current job context (for extracting params)
+   * When the number of tools exceeds maxConcurrency, they are processed
+   * in batches to prevent overwhelming external APIs.
+   * 
+   * @param projectId      - The project identifier
+   * @param toolIds        - Array of MCP tool names from the plan
+   * @param context        - Current job context (for extracting params)
+   * @param maxConcurrency - Maximum number of tools to execute in parallel (default: 10)
    * @returns Record mapping toolId → execution result
    */
   async executeAll(
     projectId: string,
     toolIds: string[],
-    context: any
+    context: any,
+    maxConcurrency: number = DEFAULT_MAX_CONCURRENCY
   ): Promise<MCPResults> {
     const results: MCPResults = {};
 
     logger.info(
-      { projectId, toolIds },
-      '🔌 MCP Executor: Starting tool execution'
+      { projectId, toolIds, parallel: true, maxConcurrency },
+      '🔌 MCP Executor: Starting PARALLEL tool execution'
     );
 
-    for (const toolId of toolIds) {
-      try {
-        const result = await this.executeTool(projectId, toolId, context);
-        results[toolId] = result;
-      } catch (error: any) {
-        logger.error(
-          { projectId, toolId, error: error.message },
-          '🔌 MCP Executor: Tool failed'
+    // Record parallel execution in Prometheus metrics
+    mcpParallelExecutions.inc({ project_id: projectId, tool_count: toolIds.length });
+
+    const startTime = Date.now();
+
+    // If tools exceed max concurrency, process in batches
+    if (toolIds.length > maxConcurrency) {
+      const batches: string[][] = [];
+      for (let i = 0; i < toolIds.length; i += maxConcurrency) {
+        batches.push(toolIds.slice(i, i + maxConcurrency));
+      }
+
+      logger.info(
+        { projectId, batchCount: batches.length, maxConcurrency },
+        '🔌 MCP Executor: Processing in batches due to concurrency limit'
+      );
+
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        logger.info(
+          { projectId, batchIndex: batchIndex + 1, totalBatches: batches.length, batchSize: batch.length },
+          '🔌 MCP Executor: Starting batch'
         );
-        results[toolId] = {
-          success: false,
-          toolId,
-          error: error.message,
-          durationMs: 0,
-        };
+        const batchResults = await this.executeBatch(projectId, batch, context);
+        Object.assign(results, batchResults);
+      }
+    } else {
+      // All tools fit within concurrency limit, execute all in parallel
+      const settled = await Promise.allSettled(
+        toolIds.map(async (toolId) => {
+          try {
+            const result = await this.executeTool(projectId, toolId, context);
+            return { toolId, result };
+          } catch (error: any) {
+            return {
+              toolId,
+              result: {
+                success: false,
+                toolId,
+                error: error.message,
+                durationMs: 0,
+              },
+            };
+          }
+        })
+      );
+
+      // Collect results
+      for (const outcome of settled) {
+        if (outcome.status === 'fulfilled') {
+          const { toolId, result } = outcome.value;
+          results[toolId] = result;
+        } else {
+          // Promise rejected (shouldn't happen due to try/catch above, but handle it)
+          logger.error(
+            { reason: outcome.reason },
+            '🔌 MCP Executor: Unexpected rejection'
+          );
+        }
+      }
+    }
+
+    // Record per-tool Prometheus metrics
+    for (const [toolId, result] of Object.entries(results)) {
+      mcpToolDuration.observe({ tool_id: toolId }, result.durationMs / 1000);
+      if (!result.success) {
+        mcpToolErrors.inc({ tool_id: toolId, error_type: 'execution_failed' });
       }
     }
 
     const successCount = Object.values(results).filter((r) => r.success).length;
+    const totalDuration = Date.now() - startTime;
+
     logger.info(
-      { projectId, success: successCount, total: toolIds.length },
-      '🔌 MCP Executor: Execution complete'
+      {
+        projectId,
+        success: successCount,
+        total: toolIds.length,
+        totalDurationMs: totalDuration,
+        avgDurationMs: toolIds.length > 0 ? Math.round(totalDuration / toolIds.length) : 0,
+      },
+      '🔌 MCP Executor: PARALLEL execution complete'
     );
+
+    return results;
+  }
+
+  /**
+   * Execute a batch of MCP tools in parallel.
+   * Used internally by executeAll when tools exceed maxConcurrency.
+   * 
+   * @param projectId - The project identifier
+   * @param batchToolIds - Array of MCP tool names for this batch
+   * @param context - Current job context
+   * @returns Record mapping toolId → execution result for this batch
+   */
+  private async executeBatch(
+    projectId: string,
+    batchToolIds: string[],
+    context: any
+  ): Promise<MCPResults> {
+    const results: MCPResults = {};
+
+    const settled = await Promise.allSettled(
+      batchToolIds.map(async (toolId) => {
+        try {
+          const result = await this.executeTool(projectId, toolId, context);
+          return { toolId, result };
+        } catch (error: any) {
+          return {
+            toolId,
+            result: {
+              success: false,
+              toolId,
+              error: error.message,
+              durationMs: 0,
+            },
+          };
+        }
+      })
+    );
+
+    // Collect results
+    for (const outcome of settled) {
+      if (outcome.status === 'fulfilled') {
+        const { toolId, result } = outcome.value;
+        results[toolId] = result;
+      } else {
+        // Promise rejected (shouldn't happen due to try/catch above, but handle it)
+        logger.error(
+          { reason: outcome.reason, projectId },
+          '🔌 MCP Executor: Unexpected rejection in batch'
+        );
+      }
+    }
 
     return results;
   }

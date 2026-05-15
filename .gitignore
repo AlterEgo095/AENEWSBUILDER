@@ -3,38 +3,23 @@ node_modules/
 .pnp
 .pnp.js
 
-# Production builds
+# Build outputs
 dist/
 build/
 .next/
-out/
+.turbo/
 
-# Environment variables
+# Environment files
 .env
 .env.local
 .env.*.local
-.env.production
+.env.bak.*
+!.env.example
 
-# Logs
-logs
-*.log
-npm-debug.log*
-pnpm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Testing
-coverage/
-.nyc_output/
-
-# Cache
-.turbo/
-.cache/
-.parcel-cache/
-
-# OS
-.DS_Store
-Thumbs.db
+# Secrets
+secrets/
+*.pem
+*.key
 
 # IDE
 .vscode/
@@ -43,19 +28,35 @@ Thumbs.db
 *.swo
 *~
 
-# Docker
-.docker/
-docker-compose.override.yml
+# OS
+.DS_Store
+Thumbs.db
 
-# Secrets
-secrets/
-*.pem
-*.key
+# Logs
+logs/
+*.log
+npm-debug.log*
 
-# Database
-*.sqlite
-*.db
+# Testing
+coverage/
+.nyc_output/
 
-# Temporary files
+# Docker volumes
+postgres_data/
+redis_data/
+prometheus_data/
+grafana_data/
+
+# Backup files
+*.bak.*
+*.backup
+*.pre_*_fix
+*.pre_*_remediation
+
+# PM2
+.pm2/
+
+# Temp
 tmp/
 temp/
+

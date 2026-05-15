@@ -1,0 +1,16 @@
+============================================
+AENEWS BUILDER Load Test Summary Report
+============================================
+Date: Thu May 14 01:48:35 CEST 2026
+Base URL: http://localhost:3181
+Results Dir: /opt/AENEWSBUILDER/tests/load/results/20260514_014759
+
+--- smoke ---
+  Latency - Avg: 0ms, P95: 0ms, P99: 0ms
+  Requests - Total: 0, Rate: 0.0 req/s
+  Error Rate: 0.0%
+  Iterations: 0
+
+============================================
+End of Report
+============================================

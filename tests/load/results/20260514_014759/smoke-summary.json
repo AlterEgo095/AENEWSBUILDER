@@ -1,0 +1,312 @@
+{
+    "metrics": {
+        "auth_login_time": {
+            "max": 400,
+            "p(90)": 400,
+            "p(95)": 400,
+            "avg": 400,
+            "min": 400,
+            "med": 400
+        },
+        "errors": {
+            "passes": 0,
+            "fails": 29,
+            "thresholds": {
+                "rate<0.05": false
+            },
+            "value": 0
+        },
+        "http_req_receiving": {
+            "min": 0.104294,
+            "med": 0.1774145,
+            "max": 0.549002,
+            "p(90)": 0.2678765,
+            "p(95)": 0.27705785,
+            "avg": 0.19933736666666665
+        },
+        "checks": {
+            "passes": 79,
+            "fails": 0,
+            "value": 1
+        },
+        "api_latency": {
+            "min": 7.300208,
+            "med": 22.802964,
+            "max": 498.421169,
+            "p(90)": 401.6023988,
+            "p(95)": 444.62303424999993,
+            "avg": 120.83437946428569,
+            "thresholds": {
+                "p(95)<2000": false
+            }
+        },
+        "data_sent": {
+            "count": 13556,
+            "rate": 425.351382535507
+        },
+        "http_req_connecting": {
+            "p(95)": 0.2149608999999989,
+            "avg": 0.044744,
+            "min": 0,
+            "med": 0,
+            "max": 0.951482,
+            "p(90)": 0
+        },
+        "http_req_blocked": {
+            "avg": 0.07397496666666668,
+            "min": 0.004779,
+            "med": 0.0080955,
+            "max": 1.05305,
+            "p(90)": 0.01994740000000008,
+            "p(95)": 0.5083871499999977
+        },
+        "project_creation_time": {
+            "p(90)": 44.000000000000014,
+            "p(95)": 55.99999999999997,
+            "avg": 28.571428571428573,
+            "min": 17,
+            "med": 25,
+            "max": 68
+        },
+        "health_check_time": {
+            "p(90)": 26.600000000000012,
+            "p(95)": 36.799999999999976,
+            "avg": 16,
+            "min": 8,
+            "med": 11,
+            "max": 47
+        },
+        "vus": {
+            "value": 1,
+            "min": 1,
+            "max": 1
+        },
+        "vus_max": {
+            "value": 1,
+            "min": 1,
+            "max": 1
+        },
+        "http_req_tls_handshaking": {
+            "max": 0,
+            "p(90)": 0,
+            "p(95)": 0,
+            "avg": 0,
+            "min": 0,
+            "med": 0
+        },
+        "total_requests": {
+            "count": 29,
+            "rate": 0.909943205483159
+        },
+        "group_duration": {
+            "avg": 495.8121559047618,
+            "min": 7.745467,
+            "med": 401.960979,
+            "max": 1091.499682,
+            "p(90)": 1057.080815,
+            "p(95)": 1057.820231
+        },
+        "http_req_duration{expected_response:true}": {
+            "p(90)": 401.5542702,
+            "p(95)": 441.33966999999984,
+            "avg": 130.45544803448274,
+            "min": 7.300208,
+            "med": 24.688145,
+            "max": 498.421169
+        },
+        "http_req_failed": {
+            "passes": 1,
+            "fails": 29,
+            "thresholds": {
+                "rate<0.05": false
+            },
+            "value": 0.03333333333333333
+        },
+        "http_req_sending": {
+            "min": 0.025237,
+            "med": 0.0573275,
+            "max": 1.424212,
+            "p(90)": 0.14456230000000003,
+            "p(95)": 0.6931393999999973,
+            "avg": 0.14334083333333328
+        },
+        "http_reqs": {
+            "count": 30,
+            "rate": 0.9413205573963713
+        },
+        "iteration_duration": {
+            "med": 4447.196918,
+            "max": 4624.797647,
+            "p(90)": 4572.0568094,
+            "p(95)": 4598.4272282,
+            "avg": 3540.817374555556,
+            "min": 0.066133
+        },
+        "data_received": {
+            "count": 39589,
+            "rate": 1242.1979848921649
+        },
+        "http_req_duration": {
+            "avg": 126.58939809999998,
+            "min": 7.300208,
+            "med": 22.802964,
+            "max": 498.421169,
+            "p(90)": 401.5061416,
+            "p(95)": 438.0563057499998,
+            "thresholds": {
+                "p(95)<2000": false
+            }
+        },
+        "iterations": {
+            "count": 7,
+            "rate": 0.21964146339248664
+        },
+        "http_req_waiting": {
+            "p(95)": 437.7863509999998,
+            "avg": 126.2467199,
+            "min": 7.022782,
+            "med": 22.535165,
+            "max": 496.447955,
+            "p(90)": 401.3274689
+        },
+        "smoke_test_passed": {
+            "passes": 7,
+            "fails": 0,
+            "value": 1
+        }
+    },
+    "setup_data": {
+        "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjbXA0cGxqN3QwMDAwZXhyZHgwZW9mM20zIiwiZW1haWwiOiJzbW9rZS10ZXN0QGFlbmV3cy5uZXQiLCJpYXQiOjE3Nzg3MTYwODMsImV4cCI6MTc3OTMyMDg4M30.XTVb5ASWxa-g5MYz-y9fbPS9K63HctN2JaOpEyUtJI_Zg05hMvfmkMiLfovwlGCny4ADa3X0xU7elAcixappZWrk_oKh7Q_cel0DfN2qiITRYB02_74wGaCSAv0gsV3ZSvHFSfD7VuxAoN04sRR-hpi-otxqBcW9E-oqzgC-coSC4Ro5VRADND4b22oyEYIKgxe1fTJ0xN42jceYXUJnjLW9Gl12_ADb60P3vbmDlyDHvLHlQTLffXz2j9x4Xu0iGAXKYqj6No7tNoAMK0tzROPtmDJHTvsNHNVe1K-O7TPjbckrYPh5284Bf7G010SYpD4JHkk-9kNxLU1WVfKdjg"
+    },
+    "root_group": {
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {
+            "setup": {
+                "name": "setup",
+                "path": "::setup",
+                "id": "5c0f8025f7e0b6654089e5b00e950f1a",
+                "groups": {},
+                "checks": {
+                        "register status valid": {
+                            "path": "::setup::register status valid",
+                            "id": "8fda6f4998592ecad2acf906748cd1a0",
+                            "passes": 1,
+                            "fails": 0,
+                            "name": "register status valid"
+                        },
+                        "login status received": {
+                            "name": "login status received",
+                            "path": "::setup::login status received",
+                            "id": "9bad25c4afe075211abbd317385e9dc1",
+                            "passes": 1,
+                            "fails": 0
+                        }
+                    }
+            },
+            "Health Check": {
+                "name": "Health Check",
+                "path": "::Health Check",
+                "id": "167c726a79efe9afd2c220eb9d49c1a2",
+                "groups": {},
+                "checks": {
+                        "health check 200": {
+                            "fails": 0,
+                            "name": "health check 200",
+                            "path": "::Health Check::health check 200",
+                            "id": "b78a4741d450fd4923469d4342600a46",
+                            "passes": 7
+                        },
+                        "status is healthy": {
+                            "id": "1b6e2634f724b6afa5257d79cae561ae",
+                            "passes": 7,
+                            "fails": 0,
+                            "name": "status is healthy",
+                            "path": "::Health Check::status is healthy"
+                        }
+                    }
+            },
+            "Auth Login": {
+                "name": "Auth Login",
+                "path": "::Auth Login",
+                "id": "d496b00c5cc1b5008585c01b04b18941",
+                "groups": {},
+                "checks": {
+                        "login returns 200": {
+                            "passes": 7,
+                            "fails": 0,
+                            "name": "login returns 200",
+                            "path": "::Auth Login::login returns 200",
+                            "id": "71796b4cc2b78a4ad1c8ac893cda878d"
+                        },
+                        "login returns token": {
+                            "fails": 0,
+                            "name": "login returns token",
+                            "path": "::Auth Login::login returns token",
+                            "id": "c7baf8cba5e6fcf98c4417bf2e17eba8",
+                            "passes": 7
+                        }
+                    }
+            },
+            "Create Project": {
+                "checks": {
+                    "project created": {
+                        "id": "e8712ba95a129c10cb6086ad23ad8036",
+                        "passes": 7,
+                        "fails": 0,
+                        "name": "project created",
+                        "path": "::Create Project::project created"
+                    },
+                    "has project ID": {
+                        "fails": 0,
+                        "name": "has project ID",
+                        "path": "::Create Project::has project ID",
+                        "id": "dff0b7044500b4cbf4b06d2118c93d70",
+                        "passes": 7
+                    },
+                    "project created successfully": {
+                        "fails": 0,
+                        "name": "project created successfully",
+                        "path": "::Create Project::project created successfully",
+                        "id": "ca88ab8e8fef4d08d177a3e63ba36966",
+                        "passes": 7
+                    },
+                    "project creation < 2s": {
+                        "fails": 0,
+                        "name": "project creation < 2s",
+                        "path": "::Create Project::project creation < 2s",
+                        "id": "47d6700aeba8c05ea80b79b567112ffb",
+                        "passes": 7
+                    },
+                    "project status retrieved": {
+                        "name": "project status retrieved",
+                        "path": "::Create Project::project status retrieved",
+                        "id": "125874fef1faaa8f852adc11ae394747",
+                        "passes": 14,
+                        "fails": 0
+                    },
+                    "project has valid state": {
+                        "id": "4519a5e2685373cd10f7c1483b4e52d8",
+                        "passes": 7,
+                        "fails": 0,
+                        "name": "project has valid state",
+                        "path": "::Create Project::project has valid state"
+                    }
+                },
+                "name": "Create Project",
+                "path": "::Create Project",
+                "id": "4ec936563edbb400b395e05b6301f35f",
+                "groups": {}
+            },
+            "teardown": {
+                "name": "teardown",
+                "path": "::teardown",
+                "id": "a8a9942382e8ffe2e56ef29e664b8229",
+                "groups": {},
+                "checks": {}
+            }
+        },
+        "checks": {},
+        "name": "",
+        "path": ""
+    }
+}

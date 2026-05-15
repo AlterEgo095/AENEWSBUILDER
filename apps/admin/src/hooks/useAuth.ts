@@ -1,6 +1,13 @@
-import { useState, useCallback, useEffect } from 'react';
+/**
+ * Admin useAuth Hook - With session timeout and auto token refresh
+ */
+
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { User } from '@/types';
 import api from '@/lib/api';
+
+const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+const TOKEN_REFRESH_MS = 10 * 60 * 1000;
 
 interface AuthState {
   user: User | null;
@@ -16,6 +23,7 @@ export function useAuth() {
     isAdmin: false,
     loading: true,
   });
+  const lastActivityRef = useRef<number>(Date.now());
 
   const clearAuthStorage = useCallback(() => {
     localStorage.removeItem('admin_token');
@@ -33,8 +41,6 @@ export function useAuth() {
 
     try {
       const res = await api.getMe();
-      // getMe() maps { valid, user } → { success, data: user }
-      // So res.data is the user object
       const user = res.data;
       if (user && res.success) {
         setState({
@@ -51,11 +57,52 @@ export function useAuth() {
       clearAuthStorage();
       setState({ user: null, isAuthenticated: false, isAdmin: false, loading: false });
     }
-  }, []);
+  }, [clearAuthStorage]);
 
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
+
+  // Session timeout
+  useEffect(() => {
+    if (!state.isAuthenticated) return;
+    const check = () => {
+      if (Date.now() - lastActivityRef.current > SESSION_TIMEOUT_MS) {
+        logout();
+      }
+    };
+    const interval = setInterval(check, 60000);
+    return () => clearInterval(interval);
+  }, [state.isAuthenticated]);
+
+  // Track activity
+  useEffect(() => {
+    if (!state.isAuthenticated) return;
+    const update = () => { lastActivityRef.current = Date.now(); };
+    window.addEventListener('mousemove', update);
+    window.addEventListener('keydown', update);
+    window.addEventListener('click', update);
+    window.addEventListener('scroll', update);
+    return () => {
+      window.removeEventListener('mousemove', update);
+      window.removeEventListener('keydown', update);
+      window.removeEventListener('click', update);
+      window.removeEventListener('scroll', update);
+    };
+  }, [state.isAuthenticated]);
+
+  // Periodic token verification
+  useEffect(() => {
+    if (!state.isAuthenticated) return;
+    const interval = setInterval(async () => {
+      try {
+        await checkAuth();
+      } catch {
+        logout();
+      }
+    }, TOKEN_REFRESH_MS);
+    return () => clearInterval(interval);
+  }, [state.isAuthenticated, checkAuth]);
 
   const login = useCallback(async (email: string, password: string, remember = true) => {
     const res = await api.login(email, password);
@@ -70,6 +117,7 @@ export function useAuth() {
         isAdmin: user.role === 'admin',
         loading: false,
       });
+      lastActivityRef.current = Date.now();
       return user;
     }
     throw new Error(res.error || 'Login failed');
@@ -78,7 +126,7 @@ export function useAuth() {
   const logout = useCallback(() => {
     clearAuthStorage();
     setState({ user: null, isAuthenticated: false, isAdmin: false, loading: false });
-  }, []);
+  }, [clearAuthStorage]);
 
   return {
     ...state,
@@ -87,3 +135,4 @@ export function useAuth() {
     refresh: checkAuth,
   };
 }
+

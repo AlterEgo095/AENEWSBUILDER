@@ -1,0 +1,20 @@
+============================================
+AENEWS BUILDER Load Test Summary Report
+============================================
+Date: 2026-05-14 01:52:33
+Results Dir: /opt/AENEWSBUILDER/tests/load/results/20260514_015158
+
+--- smoke ---
+  Latency - Avg: 123ms, P95: 421ms, P99: 0ms
+  Requests - Total: 30, Rate: 0.9 req/s
+  Error Rate: 0.0%
+  Iterations: 7
+  api_latency - Avg: 116.21, P95: 421.39
+  auth_login_time - Avg: 419.00, P95: 419.00
+  project_creation_time - Avg: 18.71, P95: 20.00
+  health_check_time - Avg: 16.14, P95: 38.30
+  smoke_test_passed - Passes: 7, Fails: 0
+
+============================================
+End of Report
+============================================

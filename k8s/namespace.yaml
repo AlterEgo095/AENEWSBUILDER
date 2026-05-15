@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aenews-builder
+  labels:
+    name: aenews-builder
+    environment: production
+    monitoring: enabled
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    istio-injection: disabled
+  annotations:
+    scheduler.alpha.kubernetes.io/defaultTolerations: '[{"operator": "Equal", "effect": "NoSchedule", "key": "dedicated", "value": "aenews-builder"}]'

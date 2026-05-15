@@ -1,7 +1,8 @@
 /**
  * Environment Configuration with Type Safety
  * 
- * v2.0 — DashScope-primary. OpenAI/Anthropic are OPTIONAL.
+ * v2.1 — DashScope-primary. OpenAI/Anthropic are OPTIONAL.
+ * Phase 2: Added Sentinel, Worker Mode, Read Replica support.
  */
 
 import { z } from 'zod';
@@ -17,10 +18,20 @@ const envSchema = z.object({
   
   // Database
   DATABASE_URL: z.string().url(),
+  DATABASE_READ_URL: z.string().optional(),
   REDIS_URL: z.string().url(),
   REDIS_PASSWORD: z.string().optional(),
   REDIS_HOST: z.string().default('localhost'),
   REDIS_PORT: z.string().transform(Number).default('6379'),
+  
+  // Redis Sentinel (Phase 2)
+  REDIS_SENTINEL_ENABLED: z.string().transform((v) => v === 'true').default('false'),
+  REDIS_SENTINEL_HOST_1: z.string().default('redis-sentinel-1'),
+  REDIS_SENTINEL_HOST_2: z.string().default('redis-sentinel-2'),
+  REDIS_SENTINEL_HOST_3: z.string().default('redis-sentinel-3'),
+  
+  // Worker Mode (Phase 2)
+  WORKER_MODE: z.string().transform((v) => v === 'true').default('false'),
   
   // JWT
   JWT_SECRET: z.string().min(1),
@@ -90,12 +101,27 @@ export const config = {
   },
   database: {
     url: env.DATABASE_URL,
+    readUrl: env.DATABASE_READ_URL || env.DATABASE_URL,
   },
   redis: {
     url: env.REDIS_URL,
     host: env.REDIS_HOST,
     port: env.REDIS_PORT,
     password: env.REDIS_PASSWORD,
+    sentinel: {
+      enabled: env.REDIS_SENTINEL_ENABLED,
+      hosts: [
+        { host: env.REDIS_SENTINEL_HOST_1, port: 26379 },
+        { host: env.REDIS_SENTINEL_HOST_2, port: 26379 },
+        { host: env.REDIS_SENTINEL_HOST_3, port: 26379 },
+      ],
+      masterName: 'aenewsb_master',
+    },
+  },
+  worker: {
+    mode: env.WORKER_MODE,
+    concurrency: env.BULLMQ_CONCURRENCY,
+    autoHealingMaxRetries: env.AUTO_HEALING_MAX_RETRIES,
   },
   jwt: {
     secret: env.JWT_SECRET,
@@ -143,10 +169,6 @@ export const config = {
     timeout: env.SANDBOX_TIMEOUT,
     poolSize: env.SANDBOX_POOL_SIZE,
   },
-  worker: {
-    concurrency: env.BULLMQ_CONCURRENCY,
-    autoHealingMaxRetries: env.AUTO_HEALING_MAX_RETRIES,
-  },
   monitoring: {
     sentryDsn: env.SENTRY_DSN,
     sentryEnvironment: env.SENTRY_ENVIRONMENT,
@@ -160,3 +182,4 @@ export const config = {
     alertThresholdDaily: env.COST_ALERT_THRESHOLD_DAILY,
   },
 } as const;
+

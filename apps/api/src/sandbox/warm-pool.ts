@@ -6,48 +6,222 @@
  * ███████║██║  ██║██║ ╚████║██████╔╝██████╔╝╚██████╔╝██╔╝ ██╗    ╚███╔███╔╝██║  ██║██║  ██║██║ ╚═╝ ██║
  * ╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝     ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝
  * 
- * POOL - Production Hardened v3.0
+ * POOL - Production Hardened v3.1 (Execution Service)
+ * 
+ * 🔒 SECURITY UPDATE v3.1:
+ * - Removed direct Docker socket access (dockerode)
+ * - All Docker operations go through ExecutionServiceClient
+ * - Docker socket is only mounted in the isolated execution-service container
+ * - API container no longer has Docker socket access
  * 
  * ✅ HARDENING FEATURES:
  * - Predictive Scaling (ARIMA-like load forecasting)
  * - Advanced Saturation Metrics (queue depth, wait time, rejection rate)
- * - Proactive Health Checks with cgroups verification
- * - Runtime Network Isolation Verification
+ * - Proactive Health Checks
  * - Container Recycling with Memory Leak Detection (dynamic thresholds)
- * - Circuit Breaker for Docker daemon failures
+ * - Circuit Breaker for Execution Service failures
  * - Zombie Container Killer
  * - Disk Saturation Prevention
  * - Graceful Degradation (waiting queue)
  * 
  * @author Dieudonneé MATANDA (ALTER EGO)
- * @version 3.0.0-hardened
+ * @version 3.1.0-hardened-exec-service
  * @license MIT
  */
 
-import Docker from 'dockerode';
+import axios, { AxiosInstance } from 'axios';
+import jwt from 'jsonwebtoken';
 import { EventEmitter } from 'events';
 import { Mutex } from 'async-mutex';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { logger } from '../config/logger.js';
 import {
   sandboxSecurityBreaches, sandboxMemoryLeaks, sandboxZombiesKilled,
   sandboxDiskUsage, sandboxAcquireTime
 } from '../observability/metrics.js';
+import { Counter, Gauge, Histogram, register as promRegister } from 'prom-client';
 
-const execAsync = promisify(exec);
-import { existsSync } from 'fs';
+// Warm Pool specific Prometheus metrics
+export const warmPoolStatus = new Gauge({
+  name: 'warm_pool_status',
+  help: 'Warm pool status: 1=healthy, 0=degraded, -1=unavailable',
+});
+export const executionServiceLatency = new Histogram({
+  name: 'execution_service_latency_ms',
+  help: 'Execution service request latency in milliseconds',
+  buckets: [50, 100, 250, 500, 1000, 2500, 5000, 10000],
+});
+export const warmPoolErrorsTotal = new Counter({
+  name: 'warm_pool_errors_total',
+  help: 'Total warm pool errors',
+  labelNames: ['type'],
+});
 
-const DOCKER_AVAILABLE = existsSync('/var/run/docker.sock');
-let docker: Docker | null = null;
-if (DOCKER_AVAILABLE) {
-  try {
-    docker = new Docker();
-  } catch (e) {
-    // ignore
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔑 SERVICE TOKEN GENERATOR (JWT for Execution Service auth)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Generate a JWT token for service-to-service authentication.
+ * Uses the same JWT_SECRET as the execution-service for token verification.
+ * Token has a short TTL (5 min) and limited scope (service role only).
+ */
+function generateServiceToken(): string {
+  const secret = process.env.JWT_SECRET || 'change-me';
+  return jwt.sign(
+    { role: 'service', sub: 'warm-pool', iss: 'aenews-api' },
+    secret,
+    { expiresIn: '5m', algorithm: 'HS256' }
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔒 EXECUTION SERVICE CLIENT
+// Replaces direct Docker/Dockerode access with authenticated HTTP API calls
+// ═══════════════════════════════════════════════════════════════════════════
+
+export class ExecutionServiceClient {
+  private client: AxiosInstance;
+  private static instance: ExecutionServiceClient;
+
+  private constructor() {
+    const baseURL = process.env.EXECUTION_SERVICE_URL || 'http://execution-service:3010';
+    this.client = axios.create({
+      baseURL,
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    // Generate fresh JWT for each request
+    this.client.interceptors.request.use((config: any) => {
+      config.headers.Authorization = `Bearer ${generateServiceToken()}`;
+      return config;
+    });
   }
-} else {
-  logger.warn('[WarmPool] Docker socket not found - sandbox features disabled');
+
+  static getInstance(): ExecutionServiceClient {
+    if (!ExecutionServiceClient.instance) {
+      ExecutionServiceClient.instance = new ExecutionServiceClient();
+    }
+    return ExecutionServiceClient.instance;
+  }
+
+  async createSandbox(config: {
+    template: string;
+    memory?: string;
+    cpus?: number;
+    networkMode?: string;
+    timeout?: number;
+    env?: string[];
+    labels?: Record<string, string>;
+  }): Promise<{ id: string; name: string; template: string; image: string; memory: string; cpus: number; timeout: number; networkMode: string; status: string }> {
+    const { data } = await this.client.post('/exec/sandbox/create', config);
+    return data;
+  }
+
+  async createContainer(config: {
+    image: string;
+    name?: string;
+    cmd?: string[];
+    env?: string[];
+    memory?: string;
+    cpus?: number;
+    timeout?: number;
+    networkMode?: string;
+    labels?: Record<string, string>;
+    workingDir?: string;
+  }): Promise<{ id: string; name: string; image: string; memory: string; cpus: number; timeout: number; status: string }> {
+    const { data } = await this.client.post('/exec/container/create', config);
+    return data;
+  }
+
+  async startContainer(id: string): Promise<void> {
+    await this.client.post(`/exec/container/${id}/start`);
+  }
+
+  async stopContainer(id: string): Promise<void> {
+    await this.client.post(`/exec/container/${id}/stop`);
+  }
+
+  async removeContainer(id: string): Promise<void> {
+    await this.client.delete(`/exec/container/${id}`);
+  }
+
+  async getContainerLogs(id: string): Promise<string> {
+    const { data } = await this.client.get(`/exec/container/${id}/logs`);
+    return data.logs;
+  }
+
+  async getContainerStats(id: string): Promise<{
+    id: string;
+    memory: { usage: number; limit: number; usageMB: string; limitMB: string };
+    cpu: { cpuDelta: number; systemDelta: number; onlineCpus: number };
+    network: Record<string, unknown>;
+  }> {
+    const { data } = await this.client.get(`/exec/container/${id}/stats`);
+    return data;
+  }
+
+  async getContainerInspect(id: string): Promise<{
+    id: string;
+    name: string;
+    state: { Running: boolean; Status: string; ExitCode: number };
+    config: { Image: string; Cmd: string[]; Env: string[]; Labels: Record<string, string> };
+    created: string;
+  }> {
+    const { data } = await this.client.get(`/exec/container/${id}/inspect`);
+    return data;
+  }
+
+  async execInContainer(id: string, cmd: string[]): Promise<{ id: string; stdout: string; stderr: string; exitCode: number }> {
+    const { data } = await this.client.post(`/exec/container/${id}/exec`, { cmd });
+    return data;
+  }
+
+  async listContainers(): Promise<{
+    containers: Array<{
+      id: string;
+      name: string;
+      image: string;
+      state: string;
+      status: string;
+      template: string;
+      type: string;
+      createdAt: string;
+    }>;
+    count: number;
+  }> {
+    const { data } = await this.client.get('/exec/containers');
+    return data;
+  }
+
+  async createNetwork(config: { name: string; internal: boolean }): Promise<{ id: string; name: string; internal: boolean; status: string }> {
+    const { data } = await this.client.post('/exec/network/create', config);
+    return data;
+  }
+
+  async removeNetwork(id: string): Promise<void> {
+    await this.client.delete(`/exec/network/${id}`);
+  }
+
+  async prune(): Promise<{
+    containersPruned: number;
+    spaceReclaimedMB: string;
+    imagesPruned: number;
+    imageSpaceReclaimedMB: string;
+  }> {
+    const { data } = await this.client.post('/exec/prune');
+    return data;
+  }
+
+  async healthCheck(): Promise<boolean> {
+    try {
+      const { status } = await this.client.get('/exec/health');
+      return status === 200;
+    } catch {
+      return false;
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -64,7 +238,7 @@ export interface SandboxConfig {
 
 export interface SandboxInstance {
   id: string;
-  container: Docker.Container;
+  containerId: string; // Docker container ID from execution service
   config: SandboxConfig;
   status: 'warming' | 'ready' | 'busy' | 'cleanup';
   createdAt: Date;
@@ -90,8 +264,8 @@ export interface PoolMetrics {
 
 class LoadForecaster {
   private history: Array<{ timestamp: number; demand: number }> = [];
-  private readonly HISTORY_SIZE = 100; // Last 100 data points
-  private readonly WINDOW_SIZE = 10; // Moving average window
+  private readonly HISTORY_SIZE = 100;
+  private readonly WINDOW_SIZE = 10;
 
   recordDemand(demand: number): void {
     this.history.push({ timestamp: Date.now(), demand });
@@ -100,41 +274,35 @@ class LoadForecaster {
     }
   }
 
-  /**
-   * Simple ARIMA-like prediction using exponential moving average
-   */
   predictDemand(): number {
     if (this.history.length < this.WINDOW_SIZE) {
-      return 0; // Not enough data
+      return 0;
     }
 
     const recent = this.history.slice(-this.WINDOW_SIZE);
     const sum = recent.reduce((acc, { demand }) => acc + demand, 0);
     const avg = sum / this.WINDOW_SIZE;
 
-    // Calculate trend
     const firstHalf = recent.slice(0, this.WINDOW_SIZE / 2);
     const secondHalf = recent.slice(this.WINDOW_SIZE / 2);
     const firstAvg = firstHalf.reduce((acc, { demand }) => acc + demand, 0) / firstHalf.length;
     const secondAvg = secondHalf.reduce((acc, { demand }) => acc + demand, 0) / secondHalf.length;
     const trend = secondAvg - firstAvg;
 
-    // Predict next value: average + trend
     const prediction = avg + trend;
-
     return Math.max(0, Math.round(prediction));
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 🏊 SANDBOX WARM POOL (Hardened)
+// 🏊 SANDBOX WARM POOL (Hardened - Execution Service)
 // ═══════════════════════════════════════════════════════════════════════════
 
 export class SandboxWarmPool extends EventEmitter {
   private pool: Map<string, SandboxInstance> = new Map();
-  private templates: Map<string, Docker.Image> = new Map();
   private acquireMutex = new Mutex();
-  private dockerHealthy = true;
+  private execService: ExecutionServiceClient;
+  private execServiceHealthy = true;
   private healthCheckInterval?: NodeJS.Timeout;
 
   // Circuit Breaker
@@ -165,28 +333,39 @@ export class SandboxWarmPool extends EventEmitter {
   private readonly MAX_POOL_SIZE = 50;
   private readonly IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
   private readonly MAX_EXECUTIONS_PER_CONTAINER = 50;
-  private readonly MAX_MEMORY_GROWTH_PERCENT = 50; // 50% growth = leak
+  private readonly MAX_MEMORY_GROWTH_PERCENT = 50;
   private readonly ISOLATED_NETWORK = 'sandbox-isolated';
+  private networkId: string | null = null;
 
   constructor() {
     super();
-    if (!docker) {
-      logger.warn('[WarmPool] Docker unavailable - running in degraded mode');
-      this.dockerHealthy = false;
-      return;
-    }
-    try {
-      this.initialize();
-    } catch (error: any) {
-      logger.warn(`[WarmPool] Initialization deferred: ${error.message}`);
-      this.dockerHealthy = false;
-    }
-    this.startDockerHealthCheck();
+    this.execService = ExecutionServiceClient.getInstance();
+
+    // Check if execution service is available
+    this.execService.healthCheck().then((healthy) => {
+      if (!healthy) {
+        logger.warn('[WarmPool] Execution Service unavailable - running in degraded mode');
+        this.execServiceHealthy = false;
+        return;
+      }
+      this.execServiceHealthy = true;
+      try {
+        this.initialize();
+      } catch (error: any) {
+        logger.warn(`[WarmPool] Initialization deferred: ${error.message}`);
+        this.execServiceHealthy = false;
+      }
+    }).catch(() => {
+      logger.warn('[WarmPool] Execution Service health check failed - degraded mode');
+      this.execServiceHealthy = false;
+    });
+
+    this.startExecServiceHealthCheck();
     this.startMemoryLeakDetector();
     this.startZombieKiller();
     this.startDiskSaturationMonitor();
-    this.startProactiveScaling(); // 🔥 NEW
-    this.startNetworkIsolationVerifier(); // 🔥 NEW
+    this.startProactiveScaling();
+    this.startNetworkIsolationVerifier();
   }
 
   /**
@@ -208,204 +387,245 @@ export class SandboxWarmPool extends EventEmitter {
         predicted: predictedDemand,
       });
 
-      // Scale up proactively if predicted demand > 80% of pool
       if (predictedDemand > currentLoad * 0.8 && currentLoad < this.MAX_POOL_SIZE) {
         const toAdd = Math.min(predictedDemand - currentLoad, this.MAX_POOL_SIZE - currentLoad);
-        logger.info(`[WarmPool] 🚀 Proactive scaling: adding ${toAdd} containers`);
+        logger.info(`[WarmPool] Proactive scaling: adding ${toAdd} containers`);
         this.warmPool();
       }
 
-      // Scale down if idle > 50%
       const idlePercent = ((currentLoad - busyContainers) / currentLoad) * 100;
       if (idlePercent > 50 && currentLoad > this.MIN_POOL_SIZE) {
-        logger.info(`[WarmPool] 🔽 Scaling down: ${idlePercent.toFixed(1)}% idle`);
+        logger.info(`[WarmPool] Scaling down: ${idlePercent.toFixed(1)}% idle`);
         this.removeIdleContainers();
       }
-    }, 30000); // Check every 30s
+    }, 30000);
   }
 
   /**
-   * 🔥 NETWORK ISOLATION VERIFICATION (Runtime Check)
+   * 🔥 NETWORK ISOLATION VERIFICATION (Runtime Check via Execution Service)
    */
   private startNetworkIsolationVerifier(): void {
     setInterval(async () => {
       for (const instance of this.pool.values()) {
         try {
-          // Verify container cannot reach external network
-          const exec = await instance.container.exec({
-            Cmd: ['ping', '-c', '1', '-W', '1', '8.8.8.8'],
-            AttachStdout: true,
-            AttachStderr: true,
-          });
-
-          const stream = await exec.start({ Detach: false });
-          let output = '';
-          stream.on('data', (chunk) => (output += chunk.toString()));
-
-          await new Promise((resolve) => stream.on('end', resolve));
+          // Verify container cannot reach external network via exec
+          const result = await this.execService.execInContainer(instance.containerId, [
+            'ping', '-c', '1', '-W', '1', '8.8.8.8',
+          ]);
 
           // If ping succeeds, network isolation is BROKEN
-          if (output.includes('1 received') || output.includes('1 packets transmitted, 1 received')) {
-            logger.error('[WarmPool] 🚨 NETWORK ISOLATION BREACH', {
-              containerId: instance.id,
-              output,
+          if (result.stdout && (result.stdout.includes('1 received') || result.stdout.includes('1 packets transmitted, 1 received'))) {
+            logger.error('[WarmPool] NETWORK ISOLATION BREACH', {
+              containerId: instance.containerId,
+              output: result.stdout,
             });
 
-            // Force destroy compromised container
             await this.removeContainer(instance.id);
             sandboxSecurityBreaches.inc({ type: 'network_isolation' });
           }
         } catch (error: any) {
           // Expected: ping should fail (network isolated)
-          logger.debug('[WarmPool] Network isolation verified', { containerId: instance.id });
+          logger.debug('[WarmPool] Network isolation verified', { containerId: instance.containerId });
         }
       }
-    }, 60000); // Check every 1 min
+    }, 60000);
   }
 
   /**
-   * 🔥 ADVANCED MEMORY LEAK DETECTOR (Dynamic Thresholds)
+   * 🔥 ADVANCED MEMORY LEAK DETECTOR (Dynamic Thresholds via Execution Service)
    */
   private startMemoryLeakDetector(): void {
     setInterval(async () => {
       for (const instance of this.pool.values()) {
         try {
-          const stats = await instance.container.stats({ stream: false });
-          const currentMemory = stats.memory_stats.usage || 0;
-          const memoryLimit = stats.memory_stats.limit || Infinity;
+          const stats = await this.execService.getContainerStats(instance.containerId);
+          const currentMemory = stats.memory.usage || 0;
+          const memoryLimit = stats.memory.limit || Infinity;
 
-          // Calculate growth from baseline
           const growthPercent = instance.memoryBaseline
             ? ((currentMemory - instance.memoryBaseline) / instance.memoryBaseline) * 100
             : 0;
 
           logger.debug('[WarmPool] Memory check', {
-            containerId: instance.id.substring(0, 12),
-            currentMB: (currentMemory / 1024 / 1024).toFixed(2),
+            containerId: instance.containerId.substring(0, 12),
+            currentMB: stats.memory.usageMB,
             baselineMB: (instance.memoryBaseline / 1024 / 1024).toFixed(2),
             growthPercent: growthPercent.toFixed(1),
           });
 
-          // Leak detected: >50% growth OR >90% of limit
           const usagePercent = (currentMemory / memoryLimit) * 100;
           if (growthPercent > this.MAX_MEMORY_GROWTH_PERCENT || usagePercent > 90) {
-            logger.warn('[WarmPool] 💧 MEMORY LEAK DETECTED - recycling', {
-              containerId: instance.id.substring(0, 12),
+            logger.warn('[WarmPool] MEMORY LEAK DETECTED - recycling', {
+              containerId: instance.containerId.substring(0, 12),
               growthPercent: growthPercent.toFixed(1),
               usagePercent: usagePercent.toFixed(1),
             });
 
             await this.removeContainer(instance.id);
             sandboxMemoryLeaks.inc();
-            this.warmPool(); // Replace immediately
+            this.warmPool();
           }
         } catch (error: any) {
           logger.error('[WarmPool] Memory check failed', {
-            containerId: instance.id,
+            containerId: instance.containerId,
             error: error.message,
           });
         }
       }
-    }, 30000); // Check every 30s
+    }, 30000);
   }
 
   /**
-   * 🔥 ZOMBIE CONTAINER KILLER
+   * 🔥 ZOMBIE CONTAINER KILLER (via Execution Service)
    */
   private startZombieKiller(): void {
+    let consecutiveErrors = 0;
+    const MAX_CONSECUTIVE_ERRORS = 5;
+    
     setInterval(async () => {
-      if (!docker) return;
       try {
-        const containers = await docker.listContainers({
-          all: true,
-          filters: { label: ['aenews.type=sandbox'] },
-        });
+        const result = await this.execService.listContainers();
 
-        for (const containerInfo of containers) {
-          const id = containerInfo.Id;
-          const state = containerInfo.State;
-          const created = new Date(containerInfo.Created * 1000);
+        for (const containerInfo of result.containers) {
+          const id = containerInfo.id;
+          const state = containerInfo.state;
+          const created = containerInfo.createdAt ? new Date(containerInfo.createdAt) : new Date();
           const age = Date.now() - created.getTime();
 
           const isZombie = (state === 'exited' && age > 60000) || (state === 'running' && age > 30 * 60 * 1000);
 
           if (isZombie) {
-            logger.warn('[WarmPool] 🧟 ZOMBIE DETECTED - killing', {
+            logger.warn('[WarmPool] ZOMBIE DETECTED - killing', {
               id: id.substring(0, 12),
               state,
               age: Math.floor(age / 1000) + 's',
             });
 
-            const container = docker.getContainer(id);
-            try {
-              await container.stop({ t: 1 });
-              await container.remove({ force: true });
-              sandboxZombiesKilled.inc();
-            } catch (killError: any) {
-              logger.error('[WarmPool] Zombie kill failed', { error: killError.message });
+            // Retry removal with exponential backoff
+            let removed = false;
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try {
+                await this.execService.removeContainer(id);
+                sandboxZombiesKilled.inc();
+                removed = true;
+                break;
+              } catch (killError: any) {
+                if (attempt < 2) {
+                  const delay = 1000 * Math.pow(2, attempt);
+                  logger.warn(`[WarmPool] Zombie kill retry ${attempt + 1}/3 in ${delay}ms`, { error: killError.message });
+                  await new Promise(r => setTimeout(r, delay));
+                } else {
+                  logger.error('[WarmPool] Zombie kill failed after 3 retries', { error: killError.message });
+                  warmPoolErrorsTotal.inc({ type: 'zombie_kill' });
+                }
+              }
             }
 
-            // Remove from pool
+            // Remove from pool regardless of kill success
             for (const [poolId, instance] of this.pool.entries()) {
-              if (instance.container.id === id) {
+              if (instance.containerId === id) {
                 this.pool.delete(poolId);
                 break;
               }
             }
           }
         }
+        
+        // Reset error counter on success
+        consecutiveErrors = 0;
       } catch (error: any) {
-        logger.error('[WarmPool] Zombie killer error', { error: error.message });
+        consecutiveErrors++;
+        if (consecutiveErrors <= 3) {
+          logger.error('[WarmPool] Zombie killer error', { error: error.message, consecutiveErrors });
+        } else if (consecutiveErrors === 4) {
+          logger.warn('[WarmPool] Zombie killer: suppressing repeated errors (execution service likely down)');
+        }
+        warmPoolErrorsTotal.inc({ type: 'zombie_killer' });
+        
+        // If too many consecutive errors, increase interval to reduce log spam
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS && !this.execServiceHealthy) {
+          logger.warn('[WarmPool] Zombie killer: execution service down, entering degraded mode');
+        }
       }
-    }, 60000); // Check every 1 min
+    }, 60000);
   }
 
   /**
-   * 🔥 DISK SATURATION MONITOR
+   * 🔥 DISK SATURATION MONITOR (via Execution Service prune)
    */
   private startDiskSaturationMonitor(): void {
+    let consecutiveErrors = 0;
+    
     setInterval(async () => {
-      if (!docker) return;
       try {
-        const df = await docker.df();
-        const volumesSize = df.Volumes?.reduce((sum, v) => sum + (v.UsageData?.Size || 0), 0) || 0;
-        const imagesSize = df.Images?.reduce((sum, i) => sum + i.Size, 0) || 0;
-        const containersSize = df.Containers?.reduce((sum, c) => sum + (c.SizeRw || 0), 0) || 0;
+        const result = await this.execService.listContainers();
+        const runningContainers = result.containers.filter(c => c.state === 'running').length;
+        const totalContainers = result.count;
 
-        const totalUsageMB = (volumesSize + imagesSize + containersSize) / 1024 / 1024;
-        const DISK_LIMIT_MB = 50000; // 50GB limit
-        const usagePercent = (totalUsageMB / DISK_LIMIT_MB) * 100;
+        // Estimate usage based on container count (rough heuristic)
+        const estimatedUsageMB = totalContainers * 100; // ~100MB per container
+        const DISK_LIMIT_MB = 50000;
+        const usagePercent = (estimatedUsageMB / DISK_LIMIT_MB) * 100;
 
         sandboxDiskUsage.set(usagePercent);
 
         if (usagePercent > 90) {
-          logger.error('[WarmPool] 🚨 DISK SATURATION', {
-            usageMB: totalUsageMB.toFixed(2),
+          logger.error('[WarmPool] DISK SATURATION', {
+            estimatedUsageMB: estimatedUsageMB.toFixed(2),
             limitMB: DISK_LIMIT_MB,
             percentUsed: usagePercent.toFixed(1) + '%',
           });
 
-          // Emergency cleanup: prune unused containers/images
-          await docker.pruneContainers({ filters: { until: ['24h'] } });
-          await docker.pruneImages({ filters: { dangling: { true: true } } });
+          // Emergency cleanup with retry
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              await this.execService.prune();
+              break;
+            } catch (pruneError: any) {
+              if (attempt === 0) {
+                logger.warn('[WarmPool] Prune retry', { error: pruneError.message });
+                await new Promise(r => setTimeout(r, 2000));
+              } else {
+                warmPoolErrorsTotal.inc({ type: 'disk_prune' });
+              }
+            }
+          }
         }
+        
+        consecutiveErrors = 0;
       } catch (error: any) {
-        logger.error('[WarmPool] Disk monitor error', { error: error.message });
+        consecutiveErrors++;
+        if (consecutiveErrors <= 3) {
+          logger.error('[WarmPool] Disk monitor error', { error: error.message, consecutiveErrors });
+        } else if (consecutiveErrors === 4) {
+          logger.warn('[WarmPool] Disk monitor: suppressing repeated errors (execution service likely down)');
+        }
+        warmPoolErrorsTotal.inc({ type: 'disk_monitor' });
       }
-    }, 60000); // Check every 1 min
+    }, 60000);
   }
 
   /**
-   * Docker health check with auto-recovery
+   * Execution Service health check with auto-recovery
    */
-  private startDockerHealthCheck(): void {
+  private startExecServiceHealthCheck(): void {
     this.healthCheckInterval = setInterval(async () => {
-      if (!docker) return;
       try {
-        await docker.ping();
-        if (!this.dockerHealthy) {
-          logger.info('[WarmPool] ✅ Docker recovered - AUTO-HEALING');
-          this.dockerHealthy = true;
+        const healthy = await this.execService.healthCheck();
+        if (!healthy && this.execServiceHealthy) {
+          logger.error('[WarmPool] Execution Service unhealthy');
+          this.execServiceHealthy = false;
+          this.emit('exec-service:unhealthy');
+
+          this.circuitBreaker.failures++;
+          this.circuitBreaker.lastFailure = Date.now();
+          if (this.circuitBreaker.failures >= this.CIRCUIT_BREAKER_THRESHOLD) {
+            this.circuitBreaker.state = 'open';
+            logger.error('[WarmPool] CIRCUIT BREAKER OPEN');
+          }
+        } else if (healthy && !this.execServiceHealthy) {
+          logger.info('[WarmPool] Execution Service recovered - AUTO-HEALING');
+          this.execServiceHealthy = true;
           this.circuitBreaker.state = 'half-open';
 
           const lostContainers = this.MIN_POOL_SIZE - this.pool.size;
@@ -417,20 +637,20 @@ export class SandboxWarmPool extends EventEmitter {
           this.processWaitingQueue();
         }
       } catch (error: any) {
-        if (this.dockerHealthy) {
-          logger.error('[WarmPool] ❌ Docker unhealthy', { error: error.message });
-          this.dockerHealthy = false;
-          this.emit('docker:unhealthy');
+        if (this.execServiceHealthy) {
+          logger.error('[WarmPool] Execution Service health check failed', { error: error.message });
+          this.execServiceHealthy = false;
+          this.emit('exec-service:unhealthy');
 
           this.circuitBreaker.failures++;
           this.circuitBreaker.lastFailure = Date.now();
           if (this.circuitBreaker.failures >= this.CIRCUIT_BREAKER_THRESHOLD) {
             this.circuitBreaker.state = 'open';
-            logger.error('[WarmPool] 🔴 CIRCUIT BREAKER OPEN');
+            logger.error('[WarmPool] CIRCUIT BREAKER OPEN');
           }
         }
       }
-    }, 10000); // Check every 10s
+    }, 10000);
   }
 
   /**
@@ -439,11 +659,10 @@ export class SandboxWarmPool extends EventEmitter {
   private async initialize(): Promise<void> {
     try {
       await this.createIsolatedNetwork();
-      await this.pullTemplateImages();
       await this.warmPool();
       this.startCleanupScheduler();
 
-      logger.info('[WarmPool] ✅ Initialized', {
+      logger.info('[WarmPool] Initialized', {
         minSize: this.MIN_POOL_SIZE,
         maxSize: this.MAX_POOL_SIZE,
       });
@@ -454,47 +673,24 @@ export class SandboxWarmPool extends EventEmitter {
   }
 
   /**
-   * Create isolated Docker network
+   * Create isolated Docker network via Execution Service
    */
   private async createIsolatedNetwork(): Promise<void> {
     try {
-      const networks = await docker.listNetworks({ filters: { name: [this.ISOLATED_NETWORK] } });
-
-      if (networks.length > 0) {
-        logger.info(`[WarmPool] Network ${this.ISOLATED_NETWORK} exists`);
-        return;
-      }
-
-      await docker.createNetwork({
-        Name: this.ISOLATED_NETWORK,
-        Driver: 'bridge',
-        Internal: true, // No external access
-        EnableIPv6: false,
+      const result = await this.execService.createNetwork({
+        name: this.ISOLATED_NETWORK,
+        internal: true,
       });
 
-      logger.info(`[WarmPool] ✅ Created isolated network ${this.ISOLATED_NETWORK}`);
+      this.networkId = result.id;
+      logger.info(`[WarmPool] Created isolated network ${this.ISOLATED_NETWORK}`);
     } catch (error: any) {
-      logger.error('[WarmPool] Network creation failed', { error: error.message });
-      throw error;
-    }
-  }
-
-  /**
-   * Pull template images
-   */
-  private async pullTemplateImages(): Promise<void> {
-    const templates = ['node:18-alpine', 'python:3.11-slim'];
-    for (const template of templates) {
-      try {
-        const image = await docker.getImage(template);
-        await image.inspect(); // Verify exists
-        this.templates.set(template, image);
-        logger.info(`[WarmPool] Template ${template} cached`);
-      } catch {
-        logger.info(`[WarmPool] Pulling ${template}...`);
-        await docker.pull(template);
-        const image = await docker.getImage(template);
-        this.templates.set(template, image);
+      // Network might already exist
+      if (error.response?.data?.message?.includes('already exists')) {
+        logger.info(`[WarmPool] Network ${this.ISOLATED_NETWORK} already exists`);
+      } else {
+        logger.error('[WarmPool] Network creation failed', { error: error.message });
+        throw error;
       }
     }
   }
@@ -518,41 +714,35 @@ export class SandboxWarmPool extends EventEmitter {
   }
 
   /**
-   * Create container with baseline memory tracking
+   * Create container via Execution Service with baseline memory tracking
    */
   private async createContainer(config: SandboxConfig): Promise<SandboxInstance> {
     const id = `sandbox-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-    const container = await docker.createContainer({
-      Image: 'node:18-alpine',
-      name: id,
-      Cmd: ['tail', '-f', '/dev/null'],
-      NetworkingConfig: {
-        EndpointsConfig: {
-          [this.ISOLATED_NETWORK]: {},
-        },
-      },
-      HostConfig: {
-        Memory: 512 * 1024 * 1024, // 512MB
-        CpuQuota: 50000, // 0.5 CPU
-        CapDrop: ['ALL'],
-        SecurityOpt: ['no-new-privileges'],
-      },
-      Labels: {
-        'aenews.type': 'sandbox',
-        'aenews.template': config.template,
+    const result = await this.execService.createSandbox({
+      template: config.template,
+      memory: config.memory || '512m',
+      cpus: config.cpus || 0.5,
+      timeout: config.timeout || 30000,
+      networkMode: config.networkMode || 'none',
+      labels: {
+        'aenews.pool-id': id,
       },
     });
 
-    await container.start();
-
     // Get baseline memory
-    const stats = await container.stats({ stream: false });
-    const memoryBaseline = stats.memory_stats.usage || 0;
+    let memoryBaseline = 0;
+    try {
+      const stats = await this.execService.getContainerStats(result.id);
+      memoryBaseline = stats.memory.usage || 0;
+    } catch {
+      // Stats might not be immediately available
+      memoryBaseline = 0;
+    }
 
     const instance: SandboxInstance = {
       id,
-      container,
+      containerId: result.id,
       config,
       status: 'ready',
       createdAt: new Date(),
@@ -562,7 +752,10 @@ export class SandboxWarmPool extends EventEmitter {
     };
 
     this.pool.set(id, instance);
-    logger.info(`[WarmPool] ✅ Created ${id}`, { memoryBaselineMB: (memoryBaseline / 1024 / 1024).toFixed(2) });
+    logger.info(`[WarmPool] Created ${id}`, {
+      containerId: result.id.substring(0, 12),
+      memoryBaselineMB: (memoryBaseline / 1024 / 1024).toFixed(2),
+    });
 
     return instance;
   }
@@ -579,7 +772,7 @@ export class SandboxWarmPool extends EventEmitter {
         const timeSinceFail = Date.now() - this.circuitBreaker.lastFailure;
         if (timeSinceFail < this.CIRCUIT_BREAKER_TIMEOUT) {
           this.rejectionCount++;
-          throw new Error('Circuit breaker OPEN - Docker unhealthy');
+          throw new Error('Circuit breaker OPEN - Execution Service unhealthy');
         }
         this.circuitBreaker.state = 'half-open';
       }
@@ -590,11 +783,10 @@ export class SandboxWarmPool extends EventEmitter {
         if (this.pool.size < this.MAX_POOL_SIZE) {
           instance = await this.createContainer(config);
         } else {
-          // Add to waiting queue
           const waitStart = Date.now();
           return new Promise((resolve, reject) => {
             this.waitingQueue.push({ config, resolve, reject, enqueuedAt: waitStart });
-            logger.warn('[WarmPool] 🚦 Container queued', { queueDepth: this.waitingQueue.length });
+            logger.warn('[WarmPool] Container queued', { queueDepth: this.waitingQueue.length });
           });
         }
       }
@@ -622,9 +814,8 @@ export class SandboxWarmPool extends EventEmitter {
 
     instance.status = 'ready';
 
-    // Auto-recycle if too many executions
     if (instance.executions >= this.MAX_EXECUTIONS_PER_CONTAINER) {
-      logger.info(`[WarmPool] ♻️ Recycling ${id} (executions: ${instance.executions})`);
+      logger.info(`[WarmPool] Recycling ${id} (executions: ${instance.executions})`);
       await this.removeContainer(id);
       this.warmPool();
     }
@@ -654,17 +845,17 @@ export class SandboxWarmPool extends EventEmitter {
   }
 
   /**
-   * Remove container
+   * Remove container via Execution Service
    */
   private async removeContainer(id: string): Promise<void> {
     const instance = this.pool.get(id);
     if (!instance) return;
 
     try {
-      await instance.container.stop({ t: 1 });
-      await instance.container.remove({ force: true });
+      await this.execService.stopContainer(instance.containerId);
+      await this.execService.removeContainer(instance.containerId);
       this.pool.delete(id);
-      logger.info(`[WarmPool] ✅ Removed ${id}`);
+      logger.info(`[WarmPool] Removed ${id}`);
     } catch (error: any) {
       logger.error(`[WarmPool] Remove failed ${id}`, { error: error.message });
     }
@@ -689,12 +880,23 @@ export class SandboxWarmPool extends EventEmitter {
   private startCleanupScheduler(): void {
     setInterval(() => {
       this.removeIdleContainers();
-    }, 60000); // Check every 1 min
+    }, 60000);
   }
 
   /**
-   * 🔥 GET ADVANCED METRICS
+   * GET ADVANCED METRICS
    */
+  /**
+   * Update Prometheus metrics gauges
+   */
+  private updatePrometheusMetrics(): void {
+    if (this.execServiceHealthy) {
+      warmPoolStatus.set(this.circuitBreaker.state === 'closed' ? 1 : 0.5);
+    } else {
+      warmPoolStatus.set(-1);
+    }
+  }
+
   getMetrics(): PoolMetrics {
     const total = this.pool.size;
     const available = Array.from(this.pool.values()).filter((i) => i.status === 'ready').length;
@@ -718,7 +920,7 @@ export class SandboxWarmPool extends EventEmitter {
   }
 
   /**
-   * 🔥 GET CIRCUIT BREAKER STATE
+   * GET CIRCUIT BREAKER STATE
    */
   getCircuitBreakerState(): { state: string; failures: number; lastFailure: number } {
     return {
@@ -732,7 +934,7 @@ export class SandboxWarmPool extends EventEmitter {
    * Shutdown pool
    */
   async shutdown(): Promise<void> {
-    logger.info('[WarmPool] 🛑 Shutting down...');
+    logger.info('[WarmPool] Shutting down...');
 
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
@@ -741,12 +943,26 @@ export class SandboxWarmPool extends EventEmitter {
     const promises = Array.from(this.pool.keys()).map((id) => this.removeContainer(id));
     await Promise.all(promises);
 
-    logger.info('[WarmPool] ✅ Shutdown complete');
+    logger.info('[WarmPool] Shutdown complete');
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 📤 EXPORTS
+// 📤 EXPORTS — Lazy Singleton (avoids blocking module initialization)
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const warmPool = new SandboxWarmPool();
+let _warmPool: SandboxWarmPool | null = null;
+
+export function getWarmPool(): SandboxWarmPool {
+  if (!_warmPool) {
+    _warmPool = new SandboxWarmPool();
+  }
+  return _warmPool;
+}
+
+/** @deprecated Use getWarmPool() instead */
+export const warmPool = new Proxy({} as SandboxWarmPool, {
+  get(_, prop) {
+    return (getWarmPool() as any)[prop];
+  }
+});

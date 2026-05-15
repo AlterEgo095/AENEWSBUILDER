@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-pdb
+  namespace: aenews-builder
+  labels:
+    app: api
+    component: backend
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: api
+      component: backend

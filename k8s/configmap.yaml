@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aenews-builder-config
+  namespace: aenews-builder
+  labels:
+    app.kubernetes.io/part-of: aenews-builder
+    app.kubernetes.io/managed-by: kustomize
+data:
+  NODE_ENV: "production"
+  API_PORT: "3001"
+  REDIS_SENTINEL_ENABLED: "true"
+  REDIS_SENTINEL_HOST_1: "redis-sentinel-0.redis-sentinel"
+  REDIS_SENTINEL_HOST_2: "redis-sentinel-1.redis-sentinel"
+  REDIS_SENTINEL_HOST_3: "redis-sentinel-2.redis-sentinel"
+  REDIS_SENTINEL_PORT: "26379"
+  REDIS_MASTER_NAME: "mymaster"
+  BULLMQ_CONCURRENCY: "10"
+  SANDBOX_NETWORK: "none"
+  SANDBOX_MEMORY_LIMIT: "512m"
+  LOG_LEVEL: "info"
+  POSTGRES_HOST: "postgres-0.postgres-headless"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "aenews_builder"
+  API_BASE_URL: "https://builder.aenews.net"
+  STUDIO_BASE_URL: "https://studio.aenews.net"
+  ADMIN_BASE_URL: "https://builder.aenews.net/admin"
+  EXECUTION_SERVICE_PORT: "3010"
+  WORKER_MODE: "false"

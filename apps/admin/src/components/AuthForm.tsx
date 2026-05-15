@@ -79,7 +79,7 @@ export function AuthForm({ onLoginSuccess }: AuthFormProps) {
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   required
-                  placeholder="admin@aenews.com"
+                  placeholder="admin@aenews.net"
                   className="input-dark pl-10 w-full"
                 />
               </div>

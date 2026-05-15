@@ -163,25 +163,55 @@ export class RedisConnectionManager {
     const existingClient = this.clients.get(name);
     if (existingClient) return existingClient;
 
-    const options: RedisOptions = {
-      host: env.REDIS_HOST,
-      port: env.REDIS_PORT,
-      password: env.REDIS_PASSWORD,
-      maxRetriesPerRequest: isWorker ? null : 3, // Worker: infinite, Queue: fail-fast
-      enableOfflineQueue: isWorker, // Worker: true, Queue: false (fail-fast)
-      retryStrategy: (times: number) => {
-        // Exponential backoff with jitter: min 1s, max 20s
-        const delay = Math.min(Math.exp(times) + Math.random() * 1000, 20000);
-        logger.warn(`[Redis] Retry ${times} for ${name} in ${Math.round(delay)}ms`);
-        return Math.max(delay, 1000);
-      },
-      reconnectOnError: (err) => {
-        logger.error(`[Redis] Reconnect triggered for ${name}:`, err.message);
-        return true; // Always attempt reconnection
-      },
-    };
+    // Phase 2: Support Redis Sentinel for HA
+    const sentinelEnabled = process.env.REDIS_SENTINEL_ENABLED === 'true';
+    let client: Redis;
 
-    const client = new IORedis(options);
+    if (sentinelEnabled) {
+      const sentinelHosts = [
+        { host: process.env.REDIS_SENTINEL_HOST_1 || 'redis-sentinel-1', port: 26379 },
+        { host: process.env.REDIS_SENTINEL_HOST_2 || 'redis-sentinel-2', port: 26379 },
+        { host: process.env.REDIS_SENTINEL_HOST_3 || 'redis-sentinel-3', port: 26379 },
+      ];
+      const redisPassword = env.REDIS_PASSWORD || process.env.REDIS_PASSWORD;
+
+      client = new IORedis({
+        sentinels: sentinelHosts,
+        name: 'aenewsb_master',
+        password: redisPassword,
+        sentinelPassword: redisPassword,
+        maxRetriesPerRequest: isWorker ? null : 3,
+        enableOfflineQueue: isWorker,
+        retryStrategy: (times: number) => {
+          const delay = Math.min(Math.exp(times) + Math.random() * 1000, 20000);
+          logger.warn(`[Redis/Sentinel] Retry ${times} for ${name} in ${Math.round(delay)}ms`);
+          return Math.max(delay, 1000);
+        },
+        reconnectOnError: (err) => {
+          logger.error(`[Redis/Sentinel] Reconnect triggered for ${name}:`, err.message);
+          return true;
+        },
+      });
+    } else {
+      const options: RedisOptions = {
+        host: env.REDIS_HOST,
+        port: env.REDIS_PORT,
+        password: env.REDIS_PASSWORD,
+        maxRetriesPerRequest: isWorker ? null : 3,
+        enableOfflineQueue: isWorker,
+        retryStrategy: (times: number) => {
+          const delay = Math.min(Math.exp(times) + Math.random() * 1000, 20000);
+          logger.warn(`[Redis] Retry ${times} for ${name} in ${Math.round(delay)}ms`);
+          return Math.max(delay, 1000);
+        },
+        reconnectOnError: (err) => {
+          logger.error(`[Redis] Reconnect triggered for ${name}:`, err.message);
+          return true;
+        },
+      };
+
+      client = new IORedis(options);
+    }
 
     // Event handlers
     client.on('connect', () => {
@@ -282,25 +312,25 @@ export class RedisConnectionManager {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const JOB_CONFIGS: Record<string, JobTypeConfig> = {
-  'project:create': {
+  'project-create': {
     concurrency: 5,
     rateLimit: { max: 10, duration: 60000 }, // 10 jobs per minute
     priority: 1,
     maxRetries: 3,
   },
-  'project:generate': {
+  'project-generate': {
     concurrency: 3,
     rateLimit: { max: 5, duration: 60000 }, // 5 jobs per minute (AI-heavy)
     priority: 2,
     maxRetries: 5,
   },
-  'sandbox:warmup': {
+  'sandbox-warmup': {
     concurrency: 10,
     rateLimit: { max: 20, duration: 60000 },
     priority: 3,
     maxRetries: 2,
   },
-  'ai:failover': {
+  'ai-failover': {
     concurrency: 2,
     rateLimit: { max: 3, duration: 60000 }, // Conservative for fallback
     priority: 1,
@@ -325,7 +355,7 @@ export class BullMQFactory {
     if (existing) return existing;
 
     const connection = this.redisManager.createConnection(`queue-${name}`, false);
-    const config = JOB_CONFIGS[name] || JOB_CONFIGS['project:create'];
+    const config = JOB_CONFIGS[name] || JOB_CONFIGS['project-create'];
 
     const queue = new Queue(name, {
       connection,
@@ -366,7 +396,7 @@ export class BullMQFactory {
     if (existing) return existing as Worker<T>;
 
     const connection = this.redisManager.createConnection(`worker-${name}`, true);
-    const config = JOB_CONFIGS[name] || JOB_CONFIGS['project:create'];
+    const config = JOB_CONFIGS[name] || JOB_CONFIGS['project-create'];
 
     const worker = new Worker<T>(name, processor, {
       connection,

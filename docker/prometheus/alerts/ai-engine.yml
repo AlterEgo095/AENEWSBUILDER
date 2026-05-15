@@ -1,0 +1,120 @@
+groups:
+  - name: ai-engine
+    rules:
+      # Pipeline Failures
+      - alert: HighPipelineFailureRate
+        expr: rate(ai_pipeline_failures_total[10m]) / rate(ai_pipeline_executions_total[10m]) * 100 > 15
+        for: 5m
+        labels:
+          severity: warning
+          team: ai
+        annotations:
+          summary: "High AI pipeline failure rate"
+          description: "AI pipeline failure rate is {{ $value }}% (threshold: 15%)"
+
+      - alert: CriticalPipelineFailureRate
+        expr: rate(ai_pipeline_failures_total[10m]) / rate(ai_pipeline_executions_total[10m]) * 100 > 40
+        for: 3m
+        labels:
+          severity: critical
+          team: ai
+        annotations:
+          summary: "Critical AI pipeline failure rate"
+          description: "AI pipeline failure rate is {{ $value }}% (threshold: 40%)"
+
+      # Classification Time
+      - alert: SlowClassification
+        expr: histogram_quantile(0.95, rate(ai_classification_duration_seconds_bucket[10m])) > 30
+        for: 10m
+        labels:
+          severity: warning
+          team: ai
+        annotations:
+          summary: "Slow AI classification"
+          description: "AI classification P95 latency is {{ $value }}s (threshold: 30s)"
+
+      # Planning Time
+      - alert: SlowPlanning
+        expr: histogram_quantile(0.95, rate(ai_planning_duration_seconds_bucket[10m])) > 60
+        for: 10m
+        labels:
+          severity: warning
+          team: ai
+        annotations:
+          summary: "Slow AI planning"
+          description: "AI planning P95 latency is {{ $value }}s (threshold: 60s)"
+
+      # MCP Tool Execution
+      - alert: MCPToolFailures
+        expr: rate(ai_mcp_tool_failures_total[10m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          team: ai
+        annotations:
+          summary: "MCP tool execution failures"
+          description: "MCP tool {{ $labels.tool }} is failing at {{ $value }}/s"
+
+      # Model Escalation
+      - alert: HighModelEscalationRate
+        expr: rate(ai_model_escalations_total[30m]) / rate(ai_model_requests_total[30m]) * 100 > 30
+        for: 15m
+        labels:
+          severity: warning
+          team: ai
+        annotations:
+          summary: "High model escalation rate"
+          description: "{{ $value }}% of requests are being escalated from primary model"
+
+      # Cost Alerts
+      - alert: HighAICostPerHour
+        expr: rate(ai_cost_dollars_total[1h]) * 3600 > 50
+        for: 30m
+        labels:
+          severity: warning
+          team: ai
+        annotations:
+          summary: "High AI cost per hour"
+          description: "AI spending rate is ${{ $value }}/hour (threshold: $50/hr)"
+
+      - alert: CriticalAICostPerHour
+        expr: rate(ai_cost_dollars_total[1h]) * 3600 > 200
+        for: 15m
+        labels:
+          severity: critical
+          team: ai
+        annotations:
+          summary: "Critical AI cost per hour"
+          description: "AI spending rate is ${{ $value }}/hour (threshold: $200/hr)"
+
+      # Auto-healing
+      - alert: LowAutoHealingSuccessRate
+        expr: rate(ai_autoheal_success_total[30m]) / rate(ai_autoheal_attempts_total[30m]) * 100 < 50
+        for: 15m
+        labels:
+          severity: warning
+          team: ai
+        annotations:
+          summary: "Low auto-healing success rate"
+          description: "Auto-healing success rate is {{ $value }}% (threshold: 50%)"
+
+      # Sandbox Pool
+      - alert: SandboxPoolExhausted
+        expr: ai_sandbox_pool_available == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: ai
+        annotations:
+          summary: "Sandbox pool exhausted"
+          description: "No sandboxes available in the pool - builds will be queued"
+
+      - alert: LowSandboxPool
+        expr: ai_sandbox_pool_available < 3
+        for: 10m
+        labels:
+          severity: warning
+          team: ai
+        annotations:
+          summary: "Low sandbox pool"
+          description: "Only {{ $value }} sandboxes available in the pool"
