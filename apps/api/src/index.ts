@@ -148,6 +148,10 @@ async function bootstrap() {
     const { previewRoutes } = await import('./routes/preview.routes.js');
     await app.register(previewRoutes, { prefix: '/api/preview' });
 
+
+    // Refinement routes (conversational code refinement)
+    const { refineRoutes } = await import('./routes/refine.routes.js');
+    await app.register(refineRoutes, { prefix: '/api/refine' });
     // Dynamic imports for heavy route modules
     const { adminRoutes } = await import('./routes/admin.routes.js');
     await app.register(adminRoutes, { prefix: '/api/admin' });

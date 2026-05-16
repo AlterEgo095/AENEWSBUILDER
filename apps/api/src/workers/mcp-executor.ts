@@ -19,6 +19,20 @@ import axios from 'axios';
 import { logger } from '../config/logger.js';
 import { mcpToolDuration, mcpToolErrors, mcpParallelExecutions } from '../observability/metrics.js';
 
+
+import OpenAI from 'openai';
+import { config } from '../config/env.js';
+import { resolveModelName, getModelSpecialParams } from '../services/ai-failover.js';
+
+// DashScope client for real web search
+let dashscope: OpenAI | null = null;
+if (config.dashscope.enabled && config.dashscope.apiKey) {
+  dashscope = new OpenAI({
+    apiKey: config.dashscope.apiKey,
+    baseURL: config.dashscope.baseUrl,
+  });
+}
+
 // ============================================
 // 🔹 TYPES
 // ============================================
@@ -740,13 +754,71 @@ export class MCPExecutor {
     const techStack = classification?.recommendedStack || [];
     const projectType = classification?.type || 'webapp';
 
-    // Build research summary based on project type
+    // ── REAL WEB SEARCH via DashScope enable_search ──
+    // DashScope supports `enable_search: true` which triggers real web search
+    // before generating the response. This gives us ACTUAL current information.
+    let searchResults: any = null;
+    let usedRealSearch = false;
+
+    if (dashscope) {
+      try {
+        const searchQuery = `Latest best practices and versions for ${techStack.join(', ')} ${projectType} development 2024 2025`;
+        const searchModel = resolveModelName('qwen-turbo');
+        const specialParams = getModelSpecialParams('qwen-turbo');
+
+        const response = await dashscope.chat.completions.create({
+          model: searchModel,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a web research assistant. Search the web and provide the latest information about technologies, versions, best practices, and current trends. Return structured JSON with: latestVersions, bestPractices, commonPitfalls, recommendedLibraries, currentTrends. Return ONLY valid JSON.',
+            },
+            {
+              role: 'user',
+              content: searchQuery,
+            },
+          ],
+          temperature: 0.3,
+          max_tokens: 2000,
+          enable_search: true,
+          ...specialParams,
+        });
+
+        const content = response.choices[0]?.message?.content || '';
+        let cleanContent = content.trim();
+        if (cleanContent.startsWith('```')) {
+          cleanContent = cleanContent.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+        }
+
+        try {
+          searchResults = JSON.parse(cleanContent);
+          usedRealSearch = true;
+          logger.info({ projectId, query: searchQuery.substring(0, 80) }, '🔌 Real web search completed via DashScope');
+        } catch {
+          // If JSON parse fails, use the raw content as search results
+          searchResults = { rawSearchContent: cleanContent };
+          usedRealSearch = true;
+        }
+      } catch (dsError: any) {
+        logger.warn({ error: dsError.message, projectId }, '🔌 DashScope web search failed, using fallback');
+      }
+    }
+
+    // ── Build recommendations (merge real search with fallback) ──
     const recommendations: Record<string, any> = {
-      bestPractices: this.getBestPractices(projectType),
-      recentVersions: this.getRecentVersions(techStack),
+      searchMethod: usedRealSearch ? 'dashscope_real_search' : 'fallback_static',
+      bestPractices: searchResults?.bestPractices || this.getBestPractices(projectType),
+      recentVersions: searchResults?.latestVersions || searchResults?.recentVersions || this.getRecentVersions(techStack),
       accessibility: this.getAccessibilityGuidelines(projectType),
       performance: this.getPerformanceTips(projectType),
+      commonPitfalls: searchResults?.commonPitfalls || [],
+      recommendedLibraries: searchResults?.recommendedLibraries || [],
+      currentTrends: searchResults?.currentTrends || [],
     };
+
+    if (usedRealSearch && searchResults?.rawSearchContent) {
+      recommendations.rawSearchContent = searchResults.rawSearchContent;
+    }
 
     return {
       success: true,
@@ -755,7 +827,6 @@ export class MCPExecutor {
       durationMs: 0,
     };
   }
-
   // ============================================
   // 🔧 HELPER METHODS
   // ============================================

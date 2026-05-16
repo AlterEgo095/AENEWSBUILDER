@@ -160,6 +160,63 @@ export async function previewRoutes(app: FastifyInstance) {
       return reply.status(500).send({ error: 'Failed to get status' });
     }
   });
+
+  // ─────────────────────────────────────────────────────────────
+  // POST /api/preview/:projectId/start — Start live preview server
+  // ─────────────────────────────────────────────────────────────
+  app.post('/:projectId/start', {
+    onRequest: [(app as any).authenticate],
+  }, async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+
+    try {
+      const { previewServerManager } = await import('../services/preview-server.js');
+      const result = await previewServerManager.startPreview(projectId);
+
+      // Build the external URL (through nginx proxy)
+      const externalUrl = `/api/preview/${projectId}/live`;
+
+      return reply.send({
+        success: true,
+        projectId,
+        url: externalUrl,
+        directUrl: result.url,
+        port: result.port,
+      });
+    } catch (error: any) {
+      logger.error({ error: error.message, projectId }, 'Failed to start preview');
+      return reply.status(500).send({ error: error.message || 'Failed to start preview' });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // GET /api/preview/:projectId/live — Proxy to live preview server
+  // ─────────────────────────────────────────────────────────────
+  app.get('/:projectId/live', {
+    onRequest: [(app as any).authenticate],
+  }, async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+
+    try {
+      const { previewServerManager } = await import('../services/preview-server.js');
+      const directUrl = previewServerManager.getPreviewUrl(projectId);
+
+      if (!directUrl) {
+        // Try to start it
+        const result = await previewServerManager.startPreview(projectId);
+        
+        // Redirect to the direct URL
+        reply.redirect(result.url);
+        return;
+      }
+
+      // Redirect to the direct URL
+      reply.redirect(directUrl);
+    } catch (error: any) {
+      logger.error({ error: error.message, projectId }, 'Failed to proxy to live preview');
+      return reply.status(500).send({ error: 'Live preview not available' });
+    }
+  });
 }
 
 // ─── Helper Functions ──────────────────────────────────────
