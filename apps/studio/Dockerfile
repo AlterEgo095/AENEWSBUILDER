@@ -34,12 +34,25 @@ FROM nginx:alpine AS runner
 COPY --from=builder /app/apps/studio/dist /usr/share/nginx/html
 
 # Nginx config for SPA (no /api proxy - external nginx handles that)
+# HTML: no-cache so browsers/Cloudflare always fetch fresh version
+# JS/CSS: immutable cache (Vite uses content-hashed filenames)
 RUN echo 'server { \
     listen 5173; \
     root /usr/share/nginx/html; \
     index index.html; \
+    \
     location / { \
         try_files $uri $uri/ /index.html; \
+    } \
+    \
+    location ~* \.html$ { \
+        add_header Cache-Control "no-cache, no-store, must-revalidate"; \
+        add_header Pragma "no-cache"; \
+        add_header Expires "0"; \
+    } \
+    \
+    location ~* \.(js|css|woff2?|png|jpg|svg|ico)$ { \
+        add_header Cache-Control "public, max-age=31536000, immutable"; \
     } \
 }' > /etc/nginx/conf.d/default.conf
 
