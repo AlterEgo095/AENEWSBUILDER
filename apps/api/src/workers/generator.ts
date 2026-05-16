@@ -115,28 +115,32 @@ export function crossValidateHTMLReferences(htmlContent: string, generatedFiles:
  * (CRITICAL FIX 8)
  */
 export function addMissingCSSLinks(htmlContent: string, generatedFiles: Map<string, string>): string {
+    const normalizePath = (p: string) => {
+        return p.replace(/^\.\//, '').replace(/^assets\//, '').replace(/^static\//, '').replace(/^public\//, '').replace(/^src\//, '');
+    };
+    
     const cssFiles = Array.from(generatedFiles.keys()).filter(f => f.endsWith('.css'));
     const linkedCSS = new Set(
-        [...htmlContent.matchAll(/<link[^>]+href=["']([^"']+\.css)["']/gi)].map(m => m[1].replace(/^\.\//, ''))
+        [...htmlContent.matchAll(/<link[^>]+href=["']([^"']+\.css)["']/gi)].map(m => normalizePath(m[1]))
     );
     
     const missingCSS = cssFiles.filter(f => {
-        const normalized = f.replace(/^\//, '');
-        // Strip assets/ prefix for cross-matching (path normalization FIX 14)
-        const strippedAssets = normalized.replace(/^assets\//, '');
+        const normalized = normalizePath(f);
+        const fileName = f.split('/').pop() || '';
         return !Array.from(linkedCSS).some(linked => 
-            linked.endsWith(normalized) || 
-            normalized.endsWith(linked) ||
-            linked.endsWith(strippedAssets) ||
-            strippedAssets.endsWith(linked.replace(/^assets\//, '')) ||
-            linked === strippedAssets
+            linked === normalized || 
+            linked === normalizePath(f) ||
+            linked.endsWith(fileName) ||
+            normalizePath(linked).endsWith(fileName)
         );
     });
     
     if (missingCSS.length === 0) return htmlContent;
     
-    // Find </head> and insert missing CSS links before it
-    const links = missingCSS.map(f => `    <link rel="stylesheet" href="${f}">`).join('\n');
+    const links = missingCSS.map(f => {
+        const htmlPath = normalizePath(f);
+        return `    <link rel="stylesheet" href="${htmlPath}">`;
+    }).join('\n');
     return htmlContent.replace('</head>', `${links}\n</head>`);
 }
 
@@ -193,21 +197,32 @@ export function addMissingScriptTags(htmlContent: string, generatedFiles: Map<st
     // Find all generated JS files
     const jsFiles = Array.from(generatedFiles.keys()).filter(f => f.endsWith('.js'));
     
-    // Find JS files not referenced in HTML (with path normalization for assets/ prefix)
+    // More robust matching - normalize paths by removing common prefixes
+    const normalizePath = (p: string) => {
+        return p
+            .replace(/^\.\//, '')
+            .replace(/^assets\//, '')
+            .replace(/^static\//, '')
+            .replace(/^public\//, '')
+            .replace(/^src\//, '');
+    };
+    
+    // Find JS files not referenced in HTML
     const missingJS = jsFiles.filter(f => {
-        const normalized = f.replace(/^\//, '');
-        // Strip assets/ prefix for cross-matching
-        const strippedAssets = normalized.replace(/^assets\//, '');
-        return !Array.from(existingJSRefs).some(ref => 
-            ref === normalized || 
-            ref === f || 
-            ref.endsWith('/' + normalized) ||
-            ref.endsWith('/' + f) ||
-            normalized.endsWith(ref.replace(/^assets\//, '')) ||
-            strippedAssets === ref ||
-            strippedAssets === ref.replace(/^assets\//, '') ||
-            ref.endsWith(strippedAssets)
-        );
+        const normalizedF = normalizePath(f);
+        const fileName = f.split('/').pop() || '';
+        
+        return !Array.from(existingJSRefs).some(ref => {
+            const normalizedRef = normalizePath(ref);
+            return ref === f ||
+                normalizedRef === normalizedF ||
+                ref.endsWith('/' + f) ||
+                ref.endsWith('/' + normalizedF) ||
+                normalizedRef === normalizedF ||
+                ref === normalizedF ||
+                ref.endsWith(fileName) ||
+                normalizedRef.endsWith(fileName);
+        });
     });
     
     if (missingJS.length === 0) return htmlContent;
@@ -216,16 +231,23 @@ export function addMissingScriptTags(htmlContent: string, generatedFiles: Map<st
     const sorted = missingJS.sort((a, b) => {
         const aName = a.split('/').pop() || '';
         const bName = b.split('/').pop() || '';
-        const isMainA = /main|app|index|init/.test(aName);
-        const isMainB = /main|app|index|init/.test(bName);
+        const isMainA = /main|app|index|init|start/.test(aName.toLowerCase());
+        const isMainB = /main|app|index|init|start/.test(bName.toLowerCase());
         if (isMainA && !isMainB) return 1;
         if (!isMainA && isMainB) return -1;
-        return 0;
+        // Sort by directory depth - shallower files first
+        const depthA = a.split('/').length;
+        const depthB = b.split('/').length;
+        return depthA - depthB;
     });
     
-    // Generate script tags
+    // Generate script tags - use the ACTUAL path from generatedFiles, not normalized
     const typeAttr = useModules ? ' type="module"' : '';
-    const scriptTags = sorted.map(f => `    <script${typeAttr} src="${f}"></script>`).join('\n');
+    const scriptTags = sorted.map(f => {
+        // Use the simple path (remove assets/ prefix if present, since HTML should reference simply)
+        const htmlPath = normalizePath(f);
+        return `    <script${typeAttr} src="${htmlPath}"></script>`;
+    }).join('\n');
     
     logger.info(`[FIX13] Injecting ${sorted.length} missing script tags: ${sorted.join(', ')}`);
     
