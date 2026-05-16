@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useSSE } from '../hooks/useSSE';
 import { RefinementChat } from './RefinementChat';
+import ProjectPreviewDashboard from './ProjectPreviewDashboard';
 import './ProjectGenerator.css';
 
 interface ProjectGeneratorProps {
@@ -371,38 +372,13 @@ export function ProjectGenerator({ token }: ProjectGeneratorProps) {
         </div>
       )}
 
-      {/* Tab Content: Preview */}
-      {activeTab === 'preview' && (
-        <div className="pg-preview-section">
-          <div className="pg-preview-controls">
-            <button className="pg-btn pg-btn-secondary" onClick={handleStartLivePreview}>
-              🔄 Rafraîchir la preview
-            </button>
-            {projectState.deployUrl && (
-              <a href={projectState.deployUrl} target="_blank" rel="noopener noreferrer" className="pg-btn pg-btn-primary">
-                🚀 Voir déployé
-              </a>
-            )}
-          </div>
-          {(projectState.livePreviewUrl || projectState.previewUrl) ? (
-            <div className="pg-preview-container">
-              <div className="pg-preview-header">
-                <span>👁️ Prévisualisation</span>
-                <span className="pg-preview-badge">Live</span>
-              </div>
-              <iframe
-                src={projectState.livePreviewUrl || projectState.previewUrl || ''}
-                className="pg-preview-iframe"
-                title="Project Preview"
-                sandbox="allow-scripts allow-same-origin"
-              />
-            </div>
-          ) : (
-            <div className="pg-preview-empty">
-              <p>La prévisualisation apparaîtra quand la génération sera terminée.</p>
-            </div>
-          )}
-        </div>
+      {/* Tab Content: Preview — Full Dashboard */}
+      {activeTab === 'preview' && projectState.jobId && (
+        <ProjectPreviewDashboard
+          projectId={projectState.jobId}
+          token={token}
+          projectName={projectName || 'Projet'}
+        />
       )}
 
       {/* Tab Content: Chat Refinement */}
