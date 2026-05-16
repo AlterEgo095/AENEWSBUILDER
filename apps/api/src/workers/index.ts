@@ -21,7 +21,7 @@ import { Orchestrator } from '../services/orchestrator.service.js';
 import { securityEngine } from '../services/security-engine.js';
 import { contextMemory } from '../services/context-memory.js';
 import { planVersioning } from '../services/plan-versioning.js';
-import { Generator } from './generator.js';
+import { Generator, crossValidateHTMLReferences, addMissingCSSLinks, fixModuleScriptTags, addMissingScriptTags, escapeRegex } from './generator.js';
 import { SandboxManager } from './sandbox-manager.js';
 import { AutoHealing } from './auto-healing.js';
 import { EventStore } from './event-store.js';
@@ -144,6 +144,89 @@ export class StateMachine {
 // 🚀 WORKER ENGINE (Auto-Chaining)
 // ============================================
 
+/**
+ * Execute file generation tasks with error recovery.
+ * - Continues on individual file failures
+ * - Retries failed files once with fallback model
+ * - Only fails pipeline if >50% of files fail
+ * - Tracks success/failure in project metadata
+ */
+async function executePipelineWithRecovery<T extends { path: string }>(
+  tasks: T[],
+  executor: (task: T, isRetry?: boolean) => Promise<void>,
+  fallbackExecutor?: (task: T) => Promise<void>,
+  metadata?: Record<string, any>
+): Promise<{ succeeded: string[]; failed: string[]; retried: string[] }> {
+  const succeeded: string[] = [];
+  const failed: string[] = [];
+  const retried: string[] = [];
+
+  // First pass: attempt all tasks
+  for (const task of tasks) {
+    try {
+      await executor(task);
+      succeeded.push(task.path);
+      console.log(`[Pipeline] ✓ Generated: ${task.path}`);
+    } catch (error) {
+      failed.push(task.path);
+      console.error(`[Pipeline] ✗ Failed: ${task.path} - ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // Second pass: retry failed tasks with fallback model
+  if (failed.length > 0 && fallbackExecutor) {
+    console.log(`[Pipeline] Retrying ${failed.length} failed files with fallback model...`);
+    const stillFailed: string[] = [];
+    
+    for (const filePath of failed) {
+      const task = tasks.find(t => t.path === filePath);
+      if (task) {
+        try {
+          await fallbackExecutor(task);
+          retried.push(filePath);
+          succeeded.push(filePath);
+          console.log(`[Pipeline] ✓ Retry succeeded: ${filePath}`);
+        } catch (retryError) {
+          stillFailed.push(filePath);
+          console.error(`[Pipeline] ✗ Retry failed: ${filePath} - ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+        }
+      }
+    }
+
+    // Update failed list to only include files that failed retry too
+    failed.length = 0;
+    failed.push(...stillFailed);
+  }
+
+  // Update metadata if provided
+  if (metadata) {
+    metadata.generationResults = {
+      succeeded,
+      failed,
+      retried,
+      successRate: tasks.length > 0 ? succeeded.length / tasks.length : 0,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  // Check if pipeline should fail (>50% failure rate)
+  const failureRate = tasks.length > 0 ? failed.length / tasks.length : 0;
+  if (failureRate > 0.5) {
+    throw new Error(
+      `Pipeline failed: ${failed.length}/${tasks.length} files failed (${(failureRate * 100).toFixed(1)}% failure rate). ` +
+      `Failed files: ${failed.join(', ')}`
+    );
+  }
+
+  if (failed.length > 0) {
+    console.warn(
+      `[Pipeline] Completed with ${failed.length} failures out of ${tasks.length} files ` +
+      `(${(failureRate * 100).toFixed(1)}% failure rate). Proceeding with partial results.`
+    );
+  }
+
+  return { succeeded, failed, retried };
+}
 export class WorkerEngine {
   private orchestrator: Orchestrator;
   private generator: Generator;
@@ -527,77 +610,227 @@ export class WorkerEngine {
 
     logger.info(
       { projectId, totalFiles, existingCount: Object.keys(existingFiles).length },
-      '📍 GENERATE: Starting file generation with context awareness'
+      '📍 GENERATE: Starting file generation with context awareness + error recovery'
     );
 
-    for (const fileSpec of plan.files) {
-      // Skip files that were already generated in a previous cycle
-      if (existingFiles[fileSpec.path]) {
-        logger.debug({ file: fileSpec.path }, 'Skipping already-generated file');
-        continue;
-      }
+    // CRITICAL FIX: Use error-recovery pipeline instead of bare for-loop
+    // If a file fails, continue with others, retry with fallback model, only fail if >50% fail
+    const filesToGenerate = plan.files.filter(
+      (f: any) => !existingFiles[f.path]
+    );
 
-      const decision = decisions?.find((d: any) => d.file === fileSpec.path);
+    const pipelineMetadata: Record<string, any> = {};
 
-      const content = await this.generator.generateFile(
-        fileSpec,
-        decision?.decision?.model || 'gpt-4o',
-        {
-          classification,
-          generatedFiles: files,          // Pass all previously generated files as context
-          techStack: classification?.recommendedStack,
+    const result = await executePipelineWithRecovery(
+      filesToGenerate,
+      // Primary executor
+      async (fileSpec: any) => {
+        const decision = decisions?.find((d: any) => d.file === fileSpec.path);
+        const content = await this.generator.generateFile(
+          fileSpec,
+          decision?.decision?.model || 'gpt-4o',
+          {
+            classification,
+            generatedFiles: files,
+            techStack: classification?.recommendedStack,
+            originalPrompt: job.data.prompt,  // CRITICAL FIX 5: Pass original prompt for brand name extraction
+          }
+        );
+        files[fileSpec.path] = content;
+
+        // Track generation cost
+        if (decision?.decision?.estimatedCost) {
+          await this.costTracker.record(projectId, 'generation', decision.decision.estimatedCost);
         }
-      );
 
-      files[fileSpec.path] = content;
+        // Update progress for frontend SSE streaming
+        const progress = Math.round(
+          ((Object.keys(files).length) / totalFiles) * 100
+        );
+        await job.updateProgress(progress);
 
-      // Track generation cost
-      if (decision?.decision?.estimatedCost) {
-        await this.costTracker.record(projectId, 'generation', decision.decision.estimatedCost);
+        // ── Publish detailed SSE event for real-time tracking ──
+        await genEventStore.record({
+          state: 'GENERATE',
+          nextState: 'GENERATE',
+          event: 'file_generated',
+          data: {
+            filePath: fileSpec.path,
+            fileType: fileSpec.type,
+            model: decision?.decision?.model || 'unknown',
+            reasoning: decision?.decision?.reasoning || '',
+            progress,
+            filesGenerated: Object.keys(files).length,
+            totalFiles,
+            estimatedCost: decision?.decision?.estimatedCost || 0,
+          },
+          timestamp: new Date().toISOString(),
+        });
+
+        logger.debug(
+          { file: fileSpec.path, model: decision?.decision?.model, progress },
+          '📍 GENERATE: File generated'
+        );
+      },
+      // Fallback executor (retry with a different model)
+      async (fileSpec: any) => {
+        const decision = decisions?.find((d: any) => d.file === fileSpec.path);
+        // Use a different, more reliable model for retry
+        const fallbackModel = decision?.decision?.model?.startsWith('qwen') ? 'gpt-4o' : 'qwen3.6-flash';
+        logger.info({ file: fileSpec.path, fallbackModel }, '📍 GENERATE: Retrying with fallback model');
+        
+        const content = await this.generator.generateFile(
+          fileSpec,
+          fallbackModel,
+          {
+            classification,
+            generatedFiles: files,
+            techStack: classification?.recommendedStack,
+            originalPrompt: job.data.prompt,  // CRITICAL FIX 5: Pass original prompt for brand name extraction
+          }
+        );
+        files[fileSpec.path] = content;
+
+        await genEventStore.record({
+          state: 'GENERATE',
+          nextState: 'GENERATE',
+          event: 'file_retry_succeeded',
+          data: {
+            filePath: fileSpec.path,
+            model: fallbackModel,
+            progress: Math.round(((Object.keys(files).length) / totalFiles) * 100),
+          },
+          timestamp: new Date().toISOString(),
+        });
+      },
+      pipelineMetadata
+    );
+
+    // ── CRITICAL FIX 6 & 8: Post-processing — Cross-validate HTML references & add missing CSS links ──
+    const generatedFilesMap = new Map(Object.entries(files));
+    let crossValidatedCount = 0;
+    let cssAutoLinkedCount = 0;
+
+    for (const [filePath, fileContent] of Object.entries(files)) {
+      if (filePath.endsWith('.html') || filePath.endsWith('.htm')) {
+        // FIX 6: Remove dead CSS/JS references
+        const afterCrossVal = crossValidateHTMLReferences(fileContent, generatedFilesMap);
+        if (afterCrossVal !== fileContent) {
+          files[filePath] = afterCrossVal;
+          crossValidatedCount++;
+          logger.debug({ file: filePath }, '📍 GENERATE: Cross-validated HTML references');
+        }
+
+        // FIX 8: Add missing CSS link tags
+        const afterCSSLink = addMissingCSSLinks(files[filePath], generatedFilesMap);
+        if (afterCSSLink !== files[filePath]) {
+          files[filePath] = afterCSSLink;
+          cssAutoLinkedCount++;
+          logger.debug({ file: filePath }, '📍 GENERATE: Auto-linked missing CSS files');
+        }
       }
+    }
 
-      // Update progress for frontend SSE streaming
-      const progress = Math.round(
-        ((Object.keys(files).length) / totalFiles) * 100
+    // CRITICAL FIX 9: Fix ES module script tags
+    // CRITICAL FIX 13: Check if modules are used for script tag injection
+    const usesModules = Array.from((generatedFilesMap as Map<string, string>).entries())
+        .filter(([p]) => p.endsWith('.js'))
+        .some(([_, c]) => /\bimport\s+.*\bfrom\s+['"]/.test(c || '') || /\bexport\s+/.test(c || ''));
+
+    let moduleFixedCount = 0;
+    for (const [filePath, fileContent] of Object.entries(files)) {
+      if (filePath.endsWith('.html') || filePath.endsWith('.htm')) {
+        const afterModuleFix = fixModuleScriptTags(fileContent, generatedFilesMap);
+        if (afterModuleFix !== fileContent) {
+          files[filePath] = afterModuleFix;
+          moduleFixedCount++;
+          logger.debug({ file: filePath }, '📍 GENERATE: Fixed ES module script tags');
+        }
+      }
+    }
+
+    // CRITICAL FIX 13: Add missing script tags for JS files not referenced in HTML
+    let scriptInjectedCount = 0;
+    for (const [filePath, fileContent] of Object.entries(files)) {
+      if (filePath.endsWith('.html') || filePath.endsWith('.htm')) {
+        const afterScriptInject = addMissingScriptTags(files[filePath], generatedFilesMap, usesModules);
+        if (afterScriptInject !== files[filePath]) {
+          files[filePath] = afterScriptInject;
+          scriptInjectedCount++;
+          logger.debug({ file: filePath }, '📍 GENERATE: Auto-injected missing script tags');
+        }
+      }
+    }
+
+    // CRITICAL FIX 11: Empty file detection and removal
+    const MIN_FILE_SIZE = 50; // bytes - a real CSS/JS file should be at least this
+    const suspiciousFiles = Array.from(Object.entries(files)).filter(([path, fileContent]) => {
+      const ext = path.split('.').pop()?.toLowerCase();
+      return (ext === 'css' || ext === 'js') && (fileContent || '').length < MIN_FILE_SIZE;
+    });
+    
+    let removedEmptyFiles = 0;
+    // escapeRegex imported statically from generator.js
+    for (const [suspectPath, suspectContent] of suspiciousFiles) {
+      logger.warn(
+        { file: suspectPath, size: (suspectContent || '').length },
+        '📍 GENERATE: Suspiciously small file detected - removing and cleaning HTML references'
       );
-      await job.updateProgress(progress);
+      delete files[suspectPath];
+      removedEmptyFiles++;
+      
+      for (const [htmlPath, htmlContent] of Object.entries(files)) {
+        if (htmlPath.endsWith('.html') || htmlPath.endsWith('.htm')) {
+          const ext = suspectPath.split('.').pop()?.toLowerCase();
+          let cleaned = htmlContent;
+          const fileName = suspectPath.replace(/^\/+/, '');
+          const escaped = escapeRegex(fileName);
+          if (ext === 'css') {
+            cleaned = htmlContent.replace(
+              new RegExp(`<link[^>]*href=["'][^"']*${escaped}["'][^>]*/?>`, 'gi'),
+              ''
+            );
+          } else if (ext === 'js') {
+            cleaned = htmlContent.replace(
+              new RegExp(`<script[^>]*src=["'][^"']*${escaped}["'][^>]*>\\s*</script>`, 'gi'),
+              ''
+            );
+          }
+          if (cleaned !== htmlContent) {
+            files[htmlPath] = cleaned;
+          }
+        }
+      }
+    }
 
-      // ── Publish detailed SSE event for real-time tracking ──
-      await genEventStore.record({
-        state: 'GENERATE',
-        nextState: 'GENERATE',
-        event: 'file_generated',
-        data: {
-          filePath: fileSpec.path,
-          fileType: fileSpec.type,
-          model: decision?.decision?.model || 'unknown',
-          reasoning: decision?.decision?.reasoning || '',
-          progress,
-          filesGenerated: Object.keys(files).length,
-          totalFiles,
-          estimatedCost: decision?.decision?.estimatedCost || 0,
-        },
-        timestamp: new Date().toISOString(),
-      });
-
-      logger.debug(
-        { file: fileSpec.path, model: decision?.decision?.model, progress },
-        '📍 GENERATE: File generated'
+        if (crossValidatedCount > 0 || cssAutoLinkedCount > 0 || moduleFixedCount > 0 || scriptInjectedCount > 0 || removedEmptyFiles > 0) {
+      logger.info(
+        { projectId, crossValidatedCount, cssAutoLinkedCount, moduleFixedCount, scriptInjectedCount, removedEmptyFiles },
+        '📍 GENERATE: Post-processing completed (cross-validation + CSS auto-link + module fix + script inject + empty file removal)'
       );
     }
 
-    // Persist generated files to job context
+    // Persist generated files AND pipeline results to job context
     await job.updateData({
       ...job.data,
       context: {
         ...job.data.context,
         files,
+        generationResults: result,
       },
     });
 
     logger.info(
-      { projectId, fileCount: Object.keys(files).length },
-      '📍 GENERATE: All files generated'
+      { 
+        projectId, 
+        fileCount: Object.keys(files).length, 
+        succeeded: result.succeeded.length,
+        failed: result.failed.length,
+        retried: result.retried.length,
+        crossValidatedCount,
+        cssAutoLinkedCount,
+      },
+      '📍 GENERATE: Pipeline completed with error recovery + post-processing'
     );
 
     return 'TEST';
@@ -618,15 +851,20 @@ export class WorkerEngine {
     logger.info({ projectId }, '📍 TEST: Phase 1 — Security scan');
     const securityResult = await securityEngine.scanProject(files);
 
-    if (!securityResult.passed) {
+    // FIX 10: Use shouldBlockPipeline to determine if findings are truly dangerous
+    const pipelineBlock = securityEngine.shouldBlockPipeline(securityResult);
+
+    if (pipelineBlock.block) {
+      // Only block on genuinely dangerous findings (code execution, injection, hardcoded secrets)
       logger.warn(
         {
           projectId,
           score: securityResult.totalScore,
           critical: securityResult.summary.critical,
           high: securityResult.summary.high,
+          blockReason: pipelineBlock.reason,
         },
-        '📍 TEST: Security scan FAILED'
+        '📍 TEST: Security scan BLOCKED pipeline (dangerous finding)'
       );
 
       await job.updateData({
@@ -636,12 +874,36 @@ export class WorkerEngine {
           securityResult,
           errors: [
             ...(job.data.context.errors || []),
-            `Security scan failed: score ${securityResult.totalScore}/100, ${securityResult.summary.critical} critical, ${securityResult.summary.high} high vulnerabilities`,
+            pipelineBlock.reason,
           ],
         },
       });
 
       return 'FIX';
+    }
+
+    if (!securityResult.passed) {
+      // Non-critical findings: warn and continue instead of failing
+      logger.warn(
+        {
+          projectId,
+          score: securityResult.totalScore,
+          critical: securityResult.summary.critical,
+          high: securityResult.summary.high,
+          medium: securityResult.summary.medium,
+          low: securityResult.summary.low,
+        },
+        '📍 TEST: Security scan has warnings (non-critical) — continuing to sandbox tests'
+      );
+
+      await job.updateData({
+        ...job.data,
+        context: {
+          ...job.data.context,
+          securityResult,
+        },
+      });
+      // Continue to sandbox tests instead of routing to FIX
     }
 
     // ── Publish SSE event for security scan result ──

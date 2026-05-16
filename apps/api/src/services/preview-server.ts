@@ -224,7 +224,7 @@ export class PreviewServerManager {
     const container = await this.docker.createContainer({
       name: containerName,
       Image: 'node:20-alpine',
-      Cmd: ['node', '-e', STATIC_SERVER_CODE.replace('__AENEWS_LIVERELOAD__', LIVE_RELOAD_SCRIPT)
+      Cmd: ['node', '-e', STATIC_SERVER_CODE.replace('__AENEWS_LIVERELOAD__', LIVE_RELOAD_SCRIPT)],
       Env: [
         `FILES=${JSON.stringify(files).replace(/'/g, "'\\''")}`,
         `PORT=${port}`,

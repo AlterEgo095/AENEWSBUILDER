@@ -282,17 +282,57 @@ export function getModelInfo(modelId: string): AIModel | null {
 
 /**
  * Check if a model requires special parameters (e.g., enable_thinking: false)
+ * CRITICAL FIX: ALL DashScope models require enable_thinking: false for non-streaming calls.
+ * Previously only qwen3-235b-a22b was handled, causing crashes with other DashScope models.
  */
 export function getModelSpecialParams(modelId: string): Record<string, any> {
   const params: Record<string, any> = {};
-  const actualName = resolveModelName(modelId);
+  const registry = MODEL_REGISTRY[modelId];
   
-  // qwen3-235b-a22b requires enable_thinking: false for non-streaming calls
-  if (actualName === 'qwen3-235b-a22b') {
+  // ALL DashScope models require enable_thinking: false for non-streaming calls
+  if (registry?.provider === AIProvider.DASHSCOPE) {
     params.enable_thinking = false;
   }
   
   return params;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🔧 MODEL-SPECIFIC MAX_TOKENS LIMITS (CRITICAL FIX 7)
+// Some models have lower max_tokens than what the generator requests.
+// This prevents API errors from exceeding model limits.
+// ═══════════════════════════════════════════════════════════════
+
+const MODEL_MAX_TOKENS: Record<string, number> = {
+    'qwen3-32b': 8192,
+    'qwen-turbo': 8192,
+    'qwen3.5-35b': 8192,
+    'qwen-plus': 8192,
+    'qwen-max': 8192,
+    'qwen3-coder-480b': 16384,
+    'qwen3-coder-plus': 16384,
+    'qwen3-max': 16384,
+    'qwen3.6-plus': 16384,
+    'qwen3.6-flash': 8192,
+    'qwen3-coder-flash': 8192,
+    'qwen3-235b-a22b': 16384,
+    'qwen3-30b-a3b': 16384,
+    'qwen3.5-plus': 16384,
+    'qwen-vl-max': 16384,
+    'qwen-coder-plus': 16384,
+};
+
+/**
+ * Get the effective max_tokens for a model, capping at the model's limit.
+ * CRITICAL FIX 7: Prevents API errors when requested tokens exceed model limits.
+ */
+export function getEffectiveMaxTokens(modelName: string, requestedTokens: number): number {
+    const cap = MODEL_MAX_TOKENS[modelName];
+    if (cap && requestedTokens > cap) {
+        logger.debug(`[AIFailover] Capping max_tokens for ${modelName}: ${requestedTokens} → ${cap}`);
+        return cap;
+    }
+    return requestedTokens;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -796,11 +836,14 @@ export class AIFailoverEngine {
   private async executeOpenAI(model: AIModel, request: AIRequest): Promise<Omit<AIResponse, 'latency' | 'attempt'>> {
     if (!this.openai) throw new Error('OpenAI not configured');
     const actualModelName = resolveModelName(model.name);
+    // CRITICAL FIX 7: Cap max_tokens per model limits
+    const effectiveMaxTokens = getEffectiveMaxTokens(model.name, request.maxTokens || 4000);
+
     const response = await this.openai.chat.completions.create({
       model: actualModelName,
       messages: request.messages as any,
       temperature: request.temperature || 0.7,
-      max_tokens: request.maxTokens || 4000,
+      max_tokens: effectiveMaxTokens,
     });
 
     const inputTokens = response.usage?.prompt_tokens || 0;
@@ -821,9 +864,12 @@ export class AIFailoverEngine {
   private async executeClaude(model: AIModel, request: AIRequest): Promise<Omit<AIResponse, 'latency' | 'attempt'>> {
     if (!this.anthropic) throw new Error('Anthropic not configured');
     const actualModelName = resolveModelName(model.name);
+    // CRITICAL FIX 7: Cap max_tokens per model limits
+    const effectiveMaxTokens = getEffectiveMaxTokens(model.name, request.maxTokens || 4000);
+
     const response = await this.anthropic.messages.create({
       model: actualModelName,
-      max_tokens: request.maxTokens || 4000,
+      max_tokens: effectiveMaxTokens,
       temperature: request.temperature || 0.7,
       messages: request.messages.map((msg) => ({
         role: msg.role === 'system' ? 'user' : (msg.role as 'user' | 'assistant'),
@@ -857,11 +903,14 @@ export class AIFailoverEngine {
     // Get special parameters for this model (e.g., enable_thinking: false)
     const specialParams = getModelSpecialParams(model.name);
 
+    // CRITICAL FIX 7: Cap max_tokens per model limits
+    const effectiveMaxTokens = getEffectiveMaxTokens(model.name, request.maxTokens || 4000);
+
     const response = await this.dashscope.chat.completions.create({
       model: actualModelName,
       messages: request.messages as any,
       temperature: request.temperature || 0.7,
-      max_tokens: request.maxTokens || 4000,
+      max_tokens: effectiveMaxTokens,
       ...specialParams,
     });
 

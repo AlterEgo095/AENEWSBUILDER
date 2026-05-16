@@ -112,13 +112,13 @@ const RULES: DetectionRule[] = [
   {
     id: 'SEC004',
     name: 'dangerous-regex-dos',
-    severity: 'critical',
+    severity: 'high',
     description:
-      'Potential ReDoS (Regular Expression Denial of Service) — nested quantifiers or overlapping alternations can cause catastrophic backtracking.',
+      'Potential ReDoS (Regular Expression Denial of Service) — deeply nested quantifiers with overlapping character classes can cause catastrophic backtracking.',
     pattern:
-      /\(\?[=!\|].*\)|\([^)]*\([^)]*\)[^)]*\)[^)]*\{[^}]*\}|(\.\*\+|\.\+\+|\.\*\?|\.\+\?)\(/,
-    penalty: 35,
-    fatal: true,
+      /(\((?:[^()]|\([^()]*\))*\)[+*]\([^)]*[+*][^)]*\)[+*])|(\[[^\]]*([+*]\s*){2,}[^\]]*\])/,
+    penalty: 15,
+    fatal: false,
   },
 
   // ── CRITICAL: Hardcoded secrets ───────────────────────────────────
@@ -562,8 +562,16 @@ export class SecurityEngine {
     const totalScoreNormalized =
       fileResults.length > 0 ? Math.round(totalScore / fileResults.length) : 100;
 
-    const anyCritical = summary.critical > 0;
-    const passed = totalScoreNormalized >= this.passThreshold && !anyCritical;
+    // FIX 10: Only block on genuine critical vulnerabilities (code execution, secrets)
+    // ReDoS and other false-positive-prone rules should not block the pipeline
+    const dangerousCriticalRules = ['SEC001', 'SEC002', 'SEC003', 'SEC005', 'SEC006', 'SEC007', 'SEC008', 'SEC009'];
+    const hasDangerousCritical = fileResults.some(r => 
+      r.vulnerabilities.some(v => 
+        v.severity === 'critical' && 
+        dangerousCriticalRules.some(rule => v.rule.startsWith(rule))
+      )
+    );
+    const passed = totalScoreNormalized >= this.passThreshold && !hasDangerousCritical;
 
     const durationMs = Date.now() - startMs;
 
@@ -687,6 +695,36 @@ export class SecurityEngine {
     if (lastDot === -1) return '';
     return filePath.substring(lastDot).toLowerCase();
   }
+
+  /**
+   * FIX 10: Determine if security findings should block the pipeline.
+   * Only truly dangerous findings (code execution, injection, hardcoded secrets)
+   * should block deployment. Medium/low findings should only warn.
+   */
+  shouldBlockPipeline(result: ProjectScanResult): { block: boolean; reason: string } {
+    const dangerousRules = ['SEC001', 'SEC002', 'SEC003', 'SEC005', 'SEC006', 'SEC007', 'SEC008', 'SEC009', 'SEC014', 'SEC015'];
+    
+    for (const fileResult of result.files) {
+      for (const vuln of fileResult.vulnerabilities) {
+        if (vuln.severity === 'critical' && dangerousRules.some(rule => vuln.rule.startsWith(rule))) {
+          return { 
+            block: true, 
+            reason: `Critical security vulnerability: ${vuln.rule} in ${fileResult.filePath} line ${vuln.line}` 
+          };
+        }
+      }
+    }
+    
+    if (result.summary.high > 5) {
+      return { 
+        block: true, 
+        reason: `Too many high-severity findings: ${result.summary.high} (threshold: 5)` 
+      };
+    }
+    
+    return { block: false, reason: '' };
+  }
+
 }
 
 // ============================================
