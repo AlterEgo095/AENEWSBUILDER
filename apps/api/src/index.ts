@@ -144,6 +144,10 @@ async function bootstrap() {
     await app.register(engineRoutes, { prefix: '/api/engine' });
     await app.register(streamRoutes, { prefix: '/api/stream' });
 
+    // Preview routes (for Studio live preview)
+    const { previewRoutes } = await import('./routes/preview.routes.js');
+    await app.register(previewRoutes, { prefix: '/api/preview' });
+
     // Dynamic imports for heavy route modules
     const { adminRoutes } = await import('./routes/admin.routes.js');
     await app.register(adminRoutes, { prefix: '/api/admin' });

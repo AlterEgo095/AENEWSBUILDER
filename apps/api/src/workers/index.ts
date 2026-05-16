@@ -378,6 +378,26 @@ export class WorkerEngine {
     // Track cost of analysis
     await this.costTracker.record(projectId, 'analysis', result.totalEstimatedCost);
 
+    // ── Publish detailed SSE event for classification result ──
+    const analysisEventStore = new EventStore(projectId);
+    await analysisEventStore.record({
+      state: 'ANALYSIS',
+      nextState: 'PLANNING',
+      event: 'analysis_complete',
+      data: {
+        classification: result.classification,
+        fileCount: result.plan?.files?.length,
+        mcpTools: result.plan?.mcpTools || [],
+        estimatedCost: result.totalEstimatedCost,
+        decisions: result.decisions?.map((d: any) => ({
+          file: d.file,
+          model: d.decision?.model,
+          reasoning: d.decision?.reasoning,
+        })),
+      },
+      timestamp: new Date().toISOString(),
+    });
+
     logger.info(
       {
         projectId,
@@ -542,6 +562,24 @@ export class WorkerEngine {
       );
       await job.updateProgress(progress);
 
+      // ── Publish detailed SSE event for real-time tracking ──
+      await genEventStore.record({
+        state: 'GENERATE',
+        nextState: 'GENERATE',
+        event: 'file_generated',
+        data: {
+          filePath: fileSpec.path,
+          fileType: fileSpec.type,
+          model: decision?.decision?.model || 'unknown',
+          reasoning: decision?.decision?.reasoning || '',
+          progress,
+          filesGenerated: Object.keys(files).length,
+          totalFiles,
+          estimatedCost: decision?.decision?.estimatedCost || 0,
+        },
+        timestamp: new Date().toISOString(),
+      });
+
       logger.debug(
         { file: fileSpec.path, model: decision?.decision?.model, progress },
         '📍 GENERATE: File generated'
@@ -605,6 +643,21 @@ export class WorkerEngine {
 
       return 'FIX';
     }
+
+    // ── Publish SSE event for security scan result ──
+    const testEventStore = new EventStore(projectId);
+    await testEventStore.record({
+      state: 'TEST',
+      nextState: 'TEST',
+      event: 'security_scan_complete',
+      data: {
+        passed: securityResult.passed,
+        score: securityResult.totalScore,
+        critical: securityResult.summary?.critical || 0,
+        high: securityResult.summary?.high || 0,
+      },
+      timestamp: new Date().toISOString(),
+    });
 
     logger.info(
       { projectId, score: securityResult.totalScore },
@@ -776,6 +829,20 @@ export class WorkerEngine {
       } catch (dbError: any) {
         logger.warn({ error: dbError.message, projectId }, '⚠️ Failed to persist deploy URL to DB');
       }
+
+      // ── Publish SSE event for deployment result ──
+      const deployEventStore = new EventStore(projectId);
+      await deployEventStore.record({
+        state: 'DEPLOY',
+        nextState: 'DONE',
+        event: 'deploy_complete',
+        data: {
+          platform: deployInfo.platform,
+          url: deployInfo.url,
+          deployId: deployInfo.deployId,
+        },
+        timestamp: new Date().toISOString(),
+      });
 
       logger.info(
         {

@@ -1,65 +1,112 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 export interface SSEEvent {
   type: string;
   data: any;
   timestamp: Date;
+  raw?: any;
 }
+
+export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting';
 
 export function useSSE(url: string | null) {
   const [events, setEvents] = useState<SSEEvent[]>([]);
-  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
+  const [lastEvent, setLastEvent] = useState<SSEEvent | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectAttempts = useRef(0);
+  const maxReconnectAttempts = 5;
 
-  useEffect(() => {
+  const connect = useCallback(() => {
     if (!url) {
       setConnectionStatus('disconnected');
       return;
     }
 
-    setConnectionStatus('connecting');
+    setConnectionStatus(reconnectAttempts.current > 0 ? 'reconnecting' : 'connecting');
 
     const eventSource = new EventSource(url);
     eventSourceRef.current = eventSource;
 
     eventSource.onopen = () => {
-      console.log('SSE connection opened');
+      console.log('[SSE] Connection opened');
       setConnectionStatus('connected');
+      reconnectAttempts.current = 0;
     };
 
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         const sseEvent: SSEEvent = {
-          type: data.type || 'message',
+          type: data.type || data.event || 'message',
           data: data.data || data,
           timestamp: new Date(),
+          raw: data,
         };
 
-        setEvents((prev) => [...prev, sseEvent]);
+        setLastEvent(sseEvent);
+        setEvents((prev) => [...prev.slice(-200), sseEvent]); // Keep last 200 events
       } catch (error) {
-        console.error('Failed to parse SSE event:', error);
+        console.error('[SSE] Failed to parse event:', error);
       }
     };
 
-    eventSource.onerror = (error) => {
-      console.error('SSE error:', error);
-      setConnectionStatus('disconnected');
-      eventSource.close();
-    };
+    // Handle named events (history, etc.)
+    eventSource.addEventListener('history', (event: any) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.events && Array.isArray(data.events)) {
+          const historyEvents = data.events.map((e: any) => ({
+            type: e.type || e.event || 'history',
+            data: e.data || e,
+            timestamp: new Date(e.timestamp || Date.now()),
+            raw: e,
+          }));
+          setEvents((prev) => [...historyEvents, ...prev]);
+        }
+      } catch (error) {
+        console.error('[SSE] Failed to parse history event:', error);
+      }
+    });
 
-    return () => {
+    eventSource.onerror = () => {
+      console.error('[SSE] Connection error');
       eventSource.close();
-      setConnectionStatus('disconnected');
+
+      if (reconnectAttempts.current < maxReconnectAttempts) {
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
+        reconnectAttempts.current++;
+        setConnectionStatus('reconnecting');
+        reconnectTimeoutRef.current = setTimeout(() => connect(), delay);
+      } else {
+        setConnectionStatus('disconnected');
+      }
     };
   }, [url]);
 
-  const clearEvents = () => {
+  useEffect(() => {
+    connect();
+
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      setConnectionStatus('disconnected');
+    };
+  }, [connect]);
+
+  const clearEvents = useCallback(() => {
     setEvents([]);
-  };
+    setLastEvent(null);
+  }, []);
 
   return {
     events,
+    lastEvent,
     connectionStatus,
     clearEvents,
   };
