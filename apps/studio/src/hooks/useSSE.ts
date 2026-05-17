@@ -9,7 +9,7 @@ export interface SSEEvent {
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting';
 
-export function useSSE(url: string | null) {
+export function useSSE(url: string | null, token?: string) {
   const [events, setEvents] = useState<SSEEvent[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [lastEvent, setLastEvent] = useState<SSEEvent | null>(null);
@@ -26,7 +26,12 @@ export function useSSE(url: string | null) {
 
     setConnectionStatus(reconnectAttempts.current > 0 ? 'reconnecting' : 'connecting');
 
-    const eventSource = new EventSource(url);
+    // Append token to URL for SSE authentication (EventSource cannot send headers)
+    let sseUrl = url;
+    if (token && !url.includes('token=')) {
+      sseUrl = `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+    }
+    const eventSource = new EventSource(sseUrl);
     eventSourceRef.current = eventSource;
 
     eventSource.onopen = () => {
@@ -83,7 +88,7 @@ export function useSSE(url: string | null) {
         setConnectionStatus('disconnected');
       }
     };
-  }, [url]);
+  }, [url, token]);
 
   useEffect(() => {
     connect();

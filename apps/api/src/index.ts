@@ -124,7 +124,27 @@ async function bootstrap() {
         request.user = { id: decoded.sub, email: decoded.email };
       } catch (err: any) {
         if (reply.statusCode === 403) return;
-        reply.code(401).send({ error: 'Unauthorized', message: 'Invalid or expired token' });
+        // Fallback: try token from query parameter (for SSE/iframe which cannot send Authorization headers)
+        const queryToken = (request.query as any)?.token;
+        if (queryToken) {
+          try {
+            const decoded = await request.server.jwt.verify(queryToken) as any;
+            if (!decoded.sub || !decoded.exp) throw new Error('Invalid token claims');
+            const now = Math.floor(Date.now() / 1000);
+            if (decoded.exp < now) throw new Error('Token expired');
+            const redis = await initRedis();
+            const revoked = await redis.get(`revoked:token:${decoded.jti || decoded.sub}`);
+            if (revoked) throw new Error('Token revoked');
+            const banned = await redis.get(`user:banned:${decoded.sub}`);
+            if (banned) { reply.code(403).send({ error: 'Forbidden', message: 'Account is banned' }); return; }
+            request.user = { id: decoded.sub, email: decoded.email };
+          } catch (e: any) {
+            if (reply.statusCode === 403) return;
+            reply.code(401).send({ error: 'Unauthorized', message: 'Invalid or expired token' });
+          }
+        } else {
+          reply.code(401).send({ error: 'Unauthorized', message: 'Invalid or expired token' });
+        }
       }
     });
 

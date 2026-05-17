@@ -82,7 +82,8 @@ export function ProjectGenerator({ token }: ProjectGeneratorProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
 
   const { events, lastEvent, connectionStatus } = useSSE(
-    projectState.jobId ? `/api/stream/${projectState.jobId}` : null
+    projectState.jobId ? `/api/stream/${projectState.jobId}` : null,
+    token
   );
 
   // Process SSE events (same as before but with livePreview support)
@@ -201,6 +202,32 @@ export function ProjectGenerator({ token }: ProjectGeneratorProps) {
       setActiveTab('preview');
     }
   }, [projectState.status]);
+
+  // Hydrate files from Preview API when project completes
+  useEffect(() => {
+    if (projectState.jobId && token && projectState.status === 'completed' && projectState.files.length === 0) {
+      fetch(`/api/preview/${projectState.jobId}/files`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+        .then(res => res.json())
+        .then(data => {
+          const fileList = data.files || data || [];
+          if (fileList.length > 0) {
+            setProjectState(prev => ({
+              ...prev,
+              files: fileList.map((f: any) => ({
+                path: f.path || f.name,
+                type: f.type || 'other',
+                model: f.model || 'unknown',
+                reasoning: f.reasoning || '',
+                status: 'done' as const,
+              })),
+            }));
+          }
+        })
+        .catch(err => console.error('Failed to hydrate files:', err));
+    }
+  }, [projectState.jobId, token, projectState.status, projectState.files.length]);
 
   const handleStartLivePreview = async () => {
     if (!projectState.jobId) return;
