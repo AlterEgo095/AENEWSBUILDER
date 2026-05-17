@@ -50,6 +50,18 @@ const envSchema = z.object({
   DASHSCOPE_BASE_URL: z.string().default('https://dashscope-intl.aliyuncs.com/compatible-mode/v1'),
   DASHSCOPE_ENABLED: z.string().transform((v) => v === 'true').default('true'),
   
+  // DeepSeek (low-cost alternative)
+  DEEPSEEK_API_KEY: z.string().optional().default(''),
+  DEEPSEEK_BASE_URL: z.string().default('https://api.deepseek.com/v1'),
+  
+  // Google Gemini
+  GEMINI_API_KEY: z.string().optional().default(''),
+  GEMINI_BASE_URL: z.string().default('https://generativelanguage.googleapis.com/v1beta/openai/'),
+  
+  // Ollama (local/self-hosted)
+  OLLAMA_ENABLED: z.string().transform((v) => v === 'true').default('false'),
+  OLLAMA_BASE_URL: z.string().default('http://localhost:11434/v1'),
+  
   // CORS
   CORS_ORIGINS: z.string().transform((str) => str.split(',').filter(Boolean)),
   FRONTEND_URL: z.string().url(),
@@ -141,6 +153,20 @@ export const config = {
     apiKey: env.DASHSCOPE_API_KEY || '',
     baseUrl: env.DASHSCOPE_BASE_URL,
     enabled: env.DASHSCOPE_ENABLED === true && !!env.DASHSCOPE_API_KEY,
+  },
+  deepseek: {
+    apiKey: env.DEEPSEEK_API_KEY || '',
+    baseUrl: env.DEEPSEEK_BASE_URL,
+    enabled: !!env.DEEPSEEK_API_KEY,
+  },
+  gemini: {
+    apiKey: env.GEMINI_API_KEY || '',
+    baseUrl: env.GEMINI_BASE_URL,
+    enabled: !!env.GEMINI_API_KEY,
+  },
+  ollama: {
+    enabled: env.OLLAMA_ENABLED,
+    baseUrl: env.OLLAMA_BASE_URL,
   },
   cors: {
     origins: env.CORS_ORIGINS,

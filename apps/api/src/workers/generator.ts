@@ -22,6 +22,7 @@ import { config } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import type { FileSpec } from '../services/orchestrator.service.js';
 import { MODEL_REGISTRY, AIProvider, MODEL_ROTATION_POOLS, resolveModelName, getModelSpecialParams, getEffectiveMaxTokens } from '../services/ai-failover.js';
+import { enforceBrandInCode, enforceDarkTheme, extractBrandName as extractBrandNameEnforcer } from '../services/brand-enforcer.js';
 
 // ============================================
 // 🔹 TYPES
@@ -53,8 +54,13 @@ function estimateTokens(text: string): number {
  * Looks for patterns like "called X", "nommé X", "nom X", "named X", "appellée X"
  */
 function extractBrandName(prompt: string, fallback: string): string {
+  // Use the enhanced brand-enforcer extraction first
+  const enforcerResult = extractBrandNameEnforcer(prompt, fallback);
+  if (enforcerResult !== 'App' && enforcerResult !== fallback) {
+    return enforcerResult;
+  }
+  // Fall back to original pattern matching
   if (!prompt) return fallback;
-  // Match patterns: "called X", "nommé X", "nom X", "named X", "appellée X", "appelé X"
   const brandNameMatch = prompt.match(/(?:called|nommé|nom|named|appellée|appelé)\s+["']?(\w+)["']?/i);
   if (brandNameMatch && brandNameMatch[1]) {
     return brandNameMatch[1];
@@ -431,6 +437,18 @@ export class Generator {
       if (fileSpec.path.endsWith('.html') || fileSpec.path.endsWith('.htm')) {
         processedContent = normalizeAssetPaths(processedContent);
         logger.debug({ file: fileSpec.path }, '🔧 Normalized asset paths in HTML file');
+        
+        // Brand Name Enforcement (post-processing) — replaces generic names
+        const brand = extractBrandName(context.originalPrompt || '', '');
+        if (brand) {
+          processedContent = enforceBrandInCode(processedContent, brand);
+          logger.debug({ file: fileSpec.path, brand }, '🏷️ Brand name enforced in HTML');
+        }
+        
+        // Dark Theme Enforcement (post-processing)
+        if (context.originalPrompt) {
+          processedContent = enforceDarkTheme(processedContent, context.originalPrompt);
+        }
       }
       
       return processedContent;

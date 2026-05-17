@@ -177,6 +177,10 @@ async function bootstrap() {
     await app.register(adminRoutes, { prefix: '/api/admin' });
 
     const { chatRoutes } = await import('./routes/chat.routes.js');
+
+    // Unified AI routes (streaming + multi-provider)
+    const { aiRoutes } = await import('./routes/ai.routes.js');
+    await app.register(aiRoutes, { prefix: '/api/ai' });
     await app.register(chatRoutes, { prefix: '/api/chat' });
 
     const { recoveryRoutes } = await import('./routes/recovery.routes.js');

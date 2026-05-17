@@ -18,22 +18,8 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '../config/prisma.js';
 import { logger } from '../config/logger.js';
 import { EventStore } from '../workers/event-store.js';
-import OpenAI from 'openai';
-import Anthropic from '@anthropic-ai/sdk';
-import { config } from '../config/env.js';
-import { resolveModelName, getModelSpecialParams } from '../services/ai-failover.js';
-
-// AI Clients
-const openai = new OpenAI({ apiKey: config.openai.apiKey });
-const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
-
-let dashscope: OpenAI | null = null;
-if (config.dashscope.enabled && config.dashscope.apiKey) {
-  dashscope = new OpenAI({
-    apiKey: config.dashscope.apiKey,
-    baseURL: config.dashscope.baseUrl,
-  });
-}
+import { getUnifiedAIClient } from '../services/unified-ai-client.js';
+import { enforceBrandInCode, enforceDarkTheme, extractBrandName as extractBrandNameEnforcer } from '../services/brand-enforcer.js';
 
 interface RefinementMessage {
   role: 'user' | 'assistant' | 'system';
@@ -96,7 +82,7 @@ export async function refineRoutes(app: FastifyInstance) {
       const messages = buildRefinementMessages(systemPrompt, body.message, body.history || [], existingFiles);
 
       // Call AI with DashScope priority
-      const result = await executeRefinement(projectId, messages, existingFiles);
+      const result = await executeRefinement(projectId, messages, existingFiles, project.prompt || undefined);
 
       if (!result.success) {
         return reply.status(500).send({ error: 'Refinement failed', details: result.explanation });
@@ -236,96 +222,65 @@ function buildRefinementMessages(
 async function executeRefinement(
   projectId: string,
   messages: Array<{ role: string; content: string }>,
-  existingFiles: Record<string, string>
+  existingFiles: Record<string, string>,
+  originalPrompt?: string
 ): Promise<RefinementResult> {
-  let content: string = '';
-  let usedModel = 'unknown';
-
-  // Try DashScope first (best for code)
-  if (dashscope) {
-    try {
-      const model = resolveModelName('qwen3-coder-480b');
-      const specialParams = getModelSpecialParams('qwen3-coder-480b');
-      const response = await dashscope.chat.completions.create({
-        model,
-        messages: messages as any,
-        temperature: 0.2,
-        max_tokens: 8000,
-        ...specialParams,
-      });
-      content = response.choices[0]?.message?.content || '';
-      usedModel = 'qwen3-coder-480b';
-    } catch (dsError: any) {
-      logger.warn({ error: dsError.message }, 'DashScope refinement failed, falling back');
-    }
-  }
-
-  // Fallback to OpenAI
-  if (!content && openai) {
-    try {
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4o',
-        messages: messages as any,
-        temperature: 0.2,
-        max_tokens: 8000,
-      });
-      content = response.choices[0]?.message?.content || '';
-      usedModel = 'gpt-4o';
-    } catch (error: any) {
-      logger.warn({ error: error.message }, 'OpenAI refinement failed');
-    }
-  }
-
-  // Fallback to Anthropic
-  if (!content && anthropic) {
-    try {
-      const sysMsg = messages.find(m => m.role === 'system')?.content || '';
-      const nonSysMessages = messages.filter(m => m.role !== 'system');
-      const response = await anthropic.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 8000,
-        temperature: 0.2,
-        system: sysMsg,
-        messages: nonSysMessages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-      });
-      const respContent = response.content[0];
-      if (respContent.type === 'text') {
-        content = respContent.text;
-        usedModel = 'claude-3-5-sonnet';
-      }
-    } catch (error: any) {
-      logger.warn({ error: error.message }, 'Anthropic refinement failed');
-    }
-  }
-
-  if (!content) {
-    return { success: false, modifiedFiles: {}, explanation: 'All AI providers failed', filesModified: [] };
-  }
-
-  // Parse the JSON response
   try {
-    // Clean markdown fences if present
-    let cleanContent = content.trim();
-    if (cleanContent.startsWith('```')) {
-      cleanContent = cleanContent.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+    // Use UnifiedAIClient (handles cascade, circuit breaker, retry automatically)
+    const client = getUnifiedAIClient();
+    const result = await client.complete({
+      messages: messages as any,
+      model: 'qwen3-coder-480b',  // Best for code refinement
+      temperature: 0.2,
+      maxTokens: 8000,
+    });
+
+    const content = result.content;
+
+    // Parse the JSON response
+    try {
+      // Clean markdown fences if present
+      let cleanContent = content.trim();
+      if (cleanContent.startsWith('```')) {
+        cleanContent = cleanContent.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+      }
+
+      const parsed = JSON.parse(cleanContent);
+      
+      // Apply brand enforcement and dark theme to modified files
+      let modifiedFiles = parsed.modifiedFiles || {};
+      if (originalPrompt) {
+        for (const [filePath, fileContent] of Object.entries(modifiedFiles)) {
+          let processed = fileContent as string;
+          if (filePath.endsWith('.html') || filePath.endsWith('.htm')) {
+            const brand = extractBrandNameEnforcer(originalPrompt);
+            if (brand && brand !== 'App') {
+              processed = enforceBrandInCode(processed, brand);
+            }
+            processed = enforceDarkTheme(processed, originalPrompt);
+            modifiedFiles[filePath] = processed;
+          }
+        }
+      }
+
+      return {
+        success: true,
+        modifiedFiles,
+        explanation: parsed.explanation || 'Files refined successfully',
+        filesModified: parsed.filesModified || Object.keys(modifiedFiles),
+      };
+    } catch (parseError: any) {
+      logger.error({ error: parseError.message, content: content.substring(0, 200) }, '[Refine] Failed to parse AI response');
+      return {
+        success: false,
+        modifiedFiles: {},
+        explanation: `Failed to parse AI response: ${parseError.message}`,
+        filesModified: [],
+      };
     }
-
-    const parsed = JSON.parse(cleanContent);
-
-    return {
-      success: true,
-      modifiedFiles: parsed.modifiedFiles || {},
-      explanation: parsed.explanation || 'Files refined successfully',
-      filesModified: parsed.filesModified || Object.keys(parsed.modifiedFiles || {}),
-    };
-  } catch (parseError: any) {
-    logger.error({ error: parseError.message, content: content.substring(0, 200) }, '[Refine] Failed to parse AI response');
-    return {
-      success: false,
-      modifiedFiles: {},
-      explanation: `Failed to parse AI response: ${parseError.message}`,
-      filesModified: [],
-    };
+  } catch (error: any) {
+    logger.error({ error: error.message }, '[Refine] All AI providers failed');
+    return { success: false, modifiedFiles: {}, explanation: `AI providers failed: ${error.message}`, filesModified: [] };
   }
 }
 
