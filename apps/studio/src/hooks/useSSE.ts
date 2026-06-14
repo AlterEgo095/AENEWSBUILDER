@@ -35,7 +35,6 @@ export function useSSE(url: string | null, token?: string) {
     eventSourceRef.current = eventSource;
 
     eventSource.onopen = () => {
-      console.log('[SSE] Connection opened');
       setConnectionStatus('connected');
       reconnectAttempts.current = 0;
     };
@@ -52,8 +51,8 @@ export function useSSE(url: string | null, token?: string) {
 
         setLastEvent(sseEvent);
         setEvents((prev) => [...prev.slice(-200), sseEvent]); // Keep last 200 events
-      } catch (error) {
-        console.error('[SSE] Failed to parse event:', error);
+      } catch {
+        // Silently ignore unparseable SSE events
       }
     };
 
@@ -70,13 +69,12 @@ export function useSSE(url: string | null, token?: string) {
           }));
           setEvents((prev) => [...historyEvents, ...prev]);
         }
-      } catch (error) {
-        console.error('[SSE] Failed to parse history event:', error);
+      } catch {
+        // Silently ignore unparseable SSE history events
       }
     });
 
     eventSource.onerror = () => {
-      console.error('[SSE] Connection error');
       eventSource.close();
 
       if (reconnectAttempts.current < maxReconnectAttempts) {

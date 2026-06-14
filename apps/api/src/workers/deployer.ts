@@ -88,13 +88,14 @@ export class Deployer {
       }
     }
 
-    // All platforms failed — return a fallback result
+    // All platforms failed — throw error instead of returning a fake URL
     logger.error({ projectId }, '🚀 Deployer: All deployment platforms failed');
     return {
-      url: `https://${request.projectName}.aenews.ai`,
-      platform: 'fallback',
+      url: '',
+      platform: 'failed',
       deployId: 'none',
       deployedAt: new Date().toISOString(),
+      error: 'All deployment platforms failed',
     };
   }
 

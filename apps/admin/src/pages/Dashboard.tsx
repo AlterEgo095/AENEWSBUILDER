@@ -204,20 +204,20 @@ export default function Dashboard() {
           <div className="space-y-3">
             <AIMetricRow
               label="DashScope (Qwen)"
-              status="active"
-              detail="Primary Provider"
+              status={m?.aiProviders?.dashscope?.status || 'unknown'}
+              detail={m?.aiProviders?.dashscope?.detail || 'Status not dynamically fetched'}
               color="#3B82F6"
             />
             <AIMetricRow
               label="OpenAI (GPT-4o)"
-              status="standby"
-              detail="Fallback Provider"
+              status={m?.aiProviders?.openai?.status || 'unknown'}
+              detail={m?.aiProviders?.openai?.detail || 'Status not dynamically fetched'}
               color="#10B981"
             />
             <AIMetricRow
               label="Anthropic (Claude)"
-              status="standby"
-              detail="Fallback Provider"
+              status={m?.aiProviders?.anthropic?.status || 'unknown'}
+              detail={m?.aiProviders?.anthropic?.detail || 'Status not dynamically fetched'}
               color="#8B5CF6"
             />
             <div className="mt-2 pt-2 border-t border-white/5">
@@ -302,8 +302,8 @@ export default function Dashboard() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <HealthIndicator
             label="API Server"
-            status="healthy"
-            latency={null}
+            status={sysHealth.api?.status === 'up' ? 'healthy' : 'degraded'}
+            latency={sysHealth.api?.latencyMs}
           />
           <HealthIndicator
             label="Redis"
@@ -330,11 +330,11 @@ export default function Dashboard() {
           />
           <HealthIndicator
             label="Model Registry"
-            status="healthy"
+            status={sysHealth.modelRegistry?.status === 'up' ? 'healthy' : 'unknown' as any}
           />
           <HealthIndicator
             label="DashScope API"
-            status="healthy"
+            status={sysHealth.dashscope?.status === 'up' ? 'healthy' : sysHealth.dashscope ? 'degraded' : 'unknown' as any}
           />
         </div>
       </Card>
@@ -344,7 +344,7 @@ export default function Dashboard() {
 
 // ─── AI Metric Row ──────────────────────────────────────────────────────────
 
-function AIMetricRow({ label, status, detail, color }: { label: string; status: 'active' | 'standby' | 'down'; detail: string; color: string }) {
+function AIMetricRow({ label, status, detail, color }: { label: string; status: 'active' | 'standby' | 'down' | 'unknown'; detail: string; color: string }) {
   return (
     <div className="flex items-center gap-3 p-2 rounded-lg bg-white/5">
       <div className="w-2 h-2 rounded-full" style={{ backgroundColor: color, boxShadow: status === 'active' ? `0 0 6px ${color}` : 'none' }} />
@@ -352,7 +352,7 @@ function AIMetricRow({ label, status, detail, color }: { label: string; status: 
         <div className="text-xs font-medium text-white">{label}</div>
         <div className="text-[10px] text-zinc-500">{detail}</div>
       </div>
-      <Badge variant={status === 'active' ? 'success' : status === 'standby' ? 'neutral' : 'danger'} dot={status === 'active'} className="text-[10px]">
+      <Badge variant={status === 'active' ? 'success' : status === 'standby' ? 'neutral' : status === 'down' ? 'danger' : 'warning'} dot={status === 'active'} className="text-[10px]">
         {status}
       </Badge>
     </div>
@@ -361,11 +361,12 @@ function AIMetricRow({ label, status, detail, color }: { label: string; status: 
 
 // ─── Health Indicator ────────────────────────────────────────────────────────
 
-function HealthIndicator({ label, status, latency, failedCount }: { label: string; status: 'healthy' | 'degraded' | 'down'; latency?: number | null; failedCount?: number }) {
+function HealthIndicator({ label, status, latency, failedCount }: { label: string; status: 'healthy' | 'degraded' | 'down' | 'unknown'; latency?: number | null; failedCount?: number }) {
   const config = {
     healthy: { color: 'text-emerald-400', bg: 'bg-emerald-500/10', variant: 'success' as const, icon: <CheckCircle size={16} /> },
     degraded: { color: 'text-amber-400', bg: 'bg-amber-500/10', variant: 'warning' as const, icon: <AlertTriangle size={16} /> },
     down: { color: 'text-red-400', bg: 'bg-red-500/10', variant: 'danger' as const, icon: <AlertTriangle size={16} /> },
+    unknown: { color: 'text-zinc-400', bg: 'bg-zinc-500/10', variant: 'neutral' as const, icon: <AlertTriangle size={16} /> },
   };
   const c = config[status];
 

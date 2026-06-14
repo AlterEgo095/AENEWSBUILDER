@@ -1,18 +1,7 @@
 # Centralized PDBs for stateful services
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: postgres-pdb
-  namespace: aenews-builder
-  labels:
-    app: postgres
-    component: database
-spec:
-  maxUnavailable: 1
-  selector:
-    matchLabels:
-      app: postgres
-      component: database
+# NOTE: postgres-pdb removed - meaningless for single-replica StatefulSet
+# (maxUnavailable:1 would block node drains since 1-1=0 pods available)
+# Re-add with appropriate minAvailable when replicas > 1
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

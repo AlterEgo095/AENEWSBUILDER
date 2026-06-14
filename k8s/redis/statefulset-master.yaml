@@ -28,6 +28,26 @@ spec:
         fsGroup: 999
         runAsNonRoot: true
         runAsUser: 999
+      initContainers:
+        - name: replace-redis-password
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              REDIS_PWD="${REDIS_PASSWORD}"
+              for f in /etc/redis/*.conf; do
+                sed -i "s/REPLACE_REDIS_PASSWORD/${REDIS_PWD}/g" "$f"
+              done
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aenews-builder-secrets
+                  key: REDIS_PASSWORD
+          volumeMounts:
+            - name: redis-config
+              mountPath: /etc/redis
       containers:
         - name: redis
           image: redis:7-alpine

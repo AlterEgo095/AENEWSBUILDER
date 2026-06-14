@@ -70,13 +70,13 @@ resources:
 
 images:
   - name: aenews-builder/api
-    newTag: latest
+    newTag: v3.0.0
   - name: aenews-builder/studio
-    newTag: latest
+    newTag: v3.0.0
   - name: aenews-builder/admin
-    newTag: latest
+    newTag: v3.0.0
   - name: aenews-builder/execution-service
-    newTag: latest
+    newTag: v3.0.0
 
 replicas:
   - name: api

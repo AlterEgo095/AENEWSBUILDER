@@ -225,7 +225,7 @@ export function ProjectGenerator({ token }: ProjectGeneratorProps) {
             }));
           }
         })
-        .catch(err => console.error('Failed to hydrate files:', err));
+        .catch(() => { /* Failed to hydrate files - non-critical */ });
     }
   }, [projectState.jobId, token, projectState.status, projectState.files.length]);
 
@@ -242,7 +242,7 @@ export function ProjectGenerator({ token }: ProjectGeneratorProps) {
         setActiveTab('preview');
       }
     } catch (error) {
-      console.error('Failed to start live preview:', error);
+      // Failed to start live preview - non-critical
     }
   };
 

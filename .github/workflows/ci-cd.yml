@@ -26,7 +26,7 @@ jobs:
 
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
-      - run: npm run lint 2>/dev/null || echo "Lint script not configured"
+      - run: npm run lint
 
   # ============================================
   # BUILD
@@ -130,5 +130,13 @@ jobs:
             echo "Running database migrations..."
             docker compose exec -T api npx prisma migrate deploy
             echo "Running health check..."
-            curl -sf http://localhost/api/health || exit 1
+            curl -sf http://localhost/api/health || {
+              echo "❌ Health check failed! Deployment may be broken."
+              echo "📋 Manual rollback instructions:"
+              echo "   1. SSH to VPS: ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}"
+              echo "   2. Rollback containers: docker compose down && docker tag aenews-builder-api:previous aenews-builder-api:latest && docker compose up -d"
+              echo "   3. Or rollback code: git checkout <previous-commit> && docker compose build && docker compose up -d"
+              echo "   4. Check logs: docker compose logs api"
+              exit 1
+            }
             echo "Deploy successful!"

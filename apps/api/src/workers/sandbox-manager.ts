@@ -321,8 +321,6 @@ export class SandboxManager {
     files: Record<string, string>,
     startTime: number,
   ): Promise<TestResult> {
-    logger.warn("[SandboxManager] Docker CLI fallback unavailable - returning skip result");
-      return { success: true, errors: [], output: "Sandbox tests skipped - warm pool unavailable, Docker CLI not accessible in container", duration: Date.now() - startTime };
     const errors: string[] = [];
     let output = '';
 

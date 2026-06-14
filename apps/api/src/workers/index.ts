@@ -166,16 +166,16 @@ async function executePipelineWithRecovery<T extends { path: string }>(
     try {
       await executor(task);
       succeeded.push(task.path);
-      console.log(`[Pipeline] ✓ Generated: ${task.path}`);
+      logger.info(`[Pipeline] ✓ Generated: ${task.path}`);
     } catch (error) {
       failed.push(task.path);
-      console.error(`[Pipeline] ✗ Failed: ${task.path} - ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(`[Pipeline] ✗ Failed: ${task.path} - ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   // Second pass: retry failed tasks with fallback model
   if (failed.length > 0 && fallbackExecutor) {
-    console.log(`[Pipeline] Retrying ${failed.length} failed files with fallback model...`);
+    logger.info(`[Pipeline] Retrying ${failed.length} failed files with fallback model...`);
     const stillFailed: string[] = [];
     
     for (const filePath of failed) {
@@ -185,10 +185,10 @@ async function executePipelineWithRecovery<T extends { path: string }>(
           await fallbackExecutor(task);
           retried.push(filePath);
           succeeded.push(filePath);
-          console.log(`[Pipeline] ✓ Retry succeeded: ${filePath}`);
+          logger.info(`[Pipeline] ✓ Retry succeeded: ${filePath}`);
         } catch (retryError) {
           stillFailed.push(filePath);
-          console.error(`[Pipeline] ✗ Retry failed: ${filePath} - ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+          logger.error(`[Pipeline] ✗ Retry failed: ${filePath} - ${retryError instanceof Error ? retryError.message : String(retryError)}`);
         }
       }
     }
@@ -219,7 +219,7 @@ async function executePipelineWithRecovery<T extends { path: string }>(
   }
 
   if (failed.length > 0) {
-    console.warn(
+    logger.warn(
       `[Pipeline] Completed with ${failed.length} failures out of ${tasks.length} files ` +
       `(${(failureRate * 100).toFixed(1)}% failure rate). Proceeding with partial results.`
     );

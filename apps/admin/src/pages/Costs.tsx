@@ -190,7 +190,7 @@ export default function CostsPage() {
     setError(null);
     try {
       const from = new Date(Date.now() - parseInt(dateRange) * 86400000).toISOString().split('T')[0];
-      const res = await api.getCosts(from);
+      const res = await api.getCosts(from, 1, 100);
       setCostData(res);
     } catch (err: any) {
       setError(err?.message || 'Failed to load cost data');

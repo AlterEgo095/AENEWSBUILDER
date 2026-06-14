@@ -58,6 +58,9 @@ RUN echo 'server { \
 
 RUN apk add --no-cache wget
 
+RUN chown -R 101:101 /usr/share/nginx/html && chown -R 101:101 /var/cache/nginx && chown -R 101:101 /var/log/nginx
+USER 101
+
 EXPOSE 5173
 
 HEALTHCHECK --interval=15s --timeout=3s --retries=3 --start-period=5s \

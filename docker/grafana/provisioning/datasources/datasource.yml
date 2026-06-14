@@ -12,9 +12,9 @@ datasources:
     database: aenewsb_builder
     user: aenewsb
     secureJsonData:
-      password: aenewsb_pg_secure_2026_vps
+      password: ${POSTGRES_PASSWORD}
     jsonData:
-      sslmode: disable
+      sslmode: require
       maxOpenConns: 5
       maxIdleConns: 2
       connMaxLifetime: 14400

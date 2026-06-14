@@ -29,8 +29,8 @@ spec:
     spec:
       terminationGracePeriodSeconds: 60
       securityContext:
-        runAsUser: 0
-        runAsGroup: 0
+        runAsUser: 1001
+        runAsGroup: 1001
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -48,7 +48,7 @@ spec:
           image: aenews-builder/execution-service:latest
           imagePullPolicy: Always
           securityContext:
-            privileged: true
+            allowPrivilegeEscalation: false
           ports:
             - containerPort: 3010
               name: http
@@ -63,11 +63,6 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-          volumeMounts:
-            - name: docker-sock
-              mountPath: /var/run/docker.sock
-            - name: docker-lib
-              mountPath: /var/lib/docker
           readinessProbe:
             httpGet:
               path: /health
@@ -91,12 +86,3 @@ spec:
             limits:
               memory: "1Gi"
               cpu: "1"
-      volumes:
-        - name: docker-sock
-          hostPath:
-            path: /var/run/docker.sock
-            type: Socket
-        - name: docker-lib
-          hostPath:
-            path: /var/lib/docker
-            type: DirectoryOrCreate

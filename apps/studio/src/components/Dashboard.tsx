@@ -1116,28 +1116,28 @@ export function Dashboard({ token }: DashboardProps) {
       const data: HealthResponse = await res.json();
 
       const serviceList: ServiceHealth[] = [
-        { name: "API Gateway", status: data.services.api || "up", uptime: "99.9%" },
-        { name: "Redis", status: data.services.redis || "up", uptime: "99.8%" },
-        { name: "PostgreSQL", status: data.services.database || "up", uptime: "99.9%" },
-        { name: "BullMQ", status: data.services.queue || "up", uptime: "99.7%" },
-        { name: "Service d'Exécution", status: data.services.api || "up", uptime: "99.5%" },
-        { name: "Warm Pool", status: data.services.api || "up", uptime: "99.6%" },
-        { name: "Prometheus", status: "up", uptime: "99.9%" },
-        { name: "Grafana", status: "up", uptime: "99.9%" },
+        { name: "API Gateway", status: data.services.api || "up", uptime: undefined },
+        { name: "Redis", status: data.services.redis || "up", uptime: undefined },
+        { name: "PostgreSQL", status: data.services.database || "up", uptime: undefined },
+        { name: "BullMQ", status: data.services.queue || "up", uptime: undefined },
+        { name: "Service d'Exécution", status: data.services.execution || data.services.api || "up", uptime: undefined },
+        { name: "Warm Pool", status: data.services.warmPool || data.services.api || "up", uptime: undefined },
+        { name: "Prometheus", status: data.services.prometheus || "up", uptime: undefined },
+        { name: "Grafana", status: data.services.grafana || "up", uptime: undefined },
       ];
       setServices(serviceList);
       setQueueStats(data.queueStats || { active: 0, waiting: 0, completed: 0, failed: 0 });
     } catch {
-      // Fallback: show all as unknown
+      // Fallback: show all as degraded when health API is unreachable
       setServices([
-        { name: "API Gateway", status: "down" as ServiceStatus },
-        { name: "Redis", status: "down" as ServiceStatus },
-        { name: "PostgreSQL", status: "down" as ServiceStatus },
-        { name: "BullMQ", status: "down" as ServiceStatus },
-        { name: "Service d'Exécution", status: "down" as ServiceStatus },
-        { name: "Warm Pool", status: "down" as ServiceStatus },
-        { name: "Prometheus", status: "down" as ServiceStatus },
-        { name: "Grafana", status: "down" as ServiceStatus },
+        { name: "API Gateway", status: "degraded" as ServiceStatus },
+        { name: "Redis", status: "degraded" as ServiceStatus },
+        { name: "PostgreSQL", status: "degraded" as ServiceStatus },
+        { name: "BullMQ", status: "degraded" as ServiceStatus },
+        { name: "Service d'Exécution", status: "degraded" as ServiceStatus },
+        { name: "Warm Pool", status: "degraded" as ServiceStatus },
+        { name: "Prometheus", status: "degraded" as ServiceStatus },
+        { name: "Grafana", status: "degraded" as ServiceStatus },
       ]);
     }
   }, [authHeaders]);

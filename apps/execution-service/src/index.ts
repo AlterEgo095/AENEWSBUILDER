@@ -67,10 +67,10 @@ try {
     retryStrategy: (times) => Math.min(times * 200, 5000),
   });
   redis.on('error', (err) => {
-    console.error('[Redis] Connection error:', err.message);
+    app.log.error({ err }, '[Redis] Connection error');
   });
 } catch (e: any) {
-  console.warn('[Redis] Not available, audit logs will be console-only');
+  // Redis not available - audit logs will fall back to logger only
 }
 
 
@@ -162,9 +162,9 @@ async function auditLog(entry: AuditEntry): Promise<void> {
   const logLine = `[AUDIT] ${entry.timestamp} | ${entry.action} | ${entry.status} | ${entry.containerId || 'N/A'} | ${entry.clientIp || 'N/A'}`;
   
   if (entry.status === 'failure') {
-    console.error(logLine, entry.error || '');
+    app.log.error({ error: entry.error }, logLine);
   } else {
-    console.info(logLine);
+    app.log.info(logLine);
   }
 
   // Store in Redis for persistence (TTL 7 days)
@@ -173,7 +173,7 @@ async function auditLog(entry: AuditEntry): Promise<void> {
       const key = `audit:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
       await redis.setex(key, 7 * 24 * 3600, JSON.stringify(entry));
     } catch (e: any) {
-      console.error('[Audit] Redis write failed:', e.message);
+      app.log.error({ error: e.message }, '[Audit] Redis write failed');
     }
   }
 }
@@ -369,7 +369,7 @@ app.post('/exec/container/create', {
           const info = await container.inspect();
           if (info.State.Running) {
             await container.stop({ t: 5 });
-            console.info(`[Timeout] Container ${container.id.substring(0, 12)} stopped after ${timeout}ms`);
+            app.log.info(`[Timeout] Container ${container.id.substring(0, 12)} stopped after ${timeout}ms`);
           }
         } catch (e: any) {
           // Container already removed or stopped
@@ -694,7 +694,7 @@ app.post('/exec/sandbox/create', {
     try {
       await docker.getImage(image).inspect();
     } catch {
-      console.info(`[Sandbox] Pulling image ${image}...`);
+      app.log.info(`[Sandbox] Pulling image ${image}...`);
       await new Promise<void>((resolve, reject) => {
         docker.pull(image, (err: Error | null, stream: NodeJS.ReadableStream) => {
           if (err) return reject(err);
@@ -744,7 +744,7 @@ app.post('/exec/sandbox/create', {
           const info = await container.inspect();
           if (info.State.Running) {
             await container.stop({ t: 5 });
-            console.info(`[Sandbox-Timeout] ${sandboxId} stopped after ${timeout}ms`);
+            app.log.info(`[Sandbox-Timeout] ${sandboxId} stopped after ${timeout}ms`);
           }
         } catch {
           // Container already removed or stopped
@@ -1025,15 +1025,15 @@ async function start() {
 
     // Verify Docker connectivity
     await docker.ping();
-    console.info('[Docker] Connected successfully');
+    app.log.info('[Docker] Connected successfully');
 
     // Start server
     await app.listen({ port: PORT, host: '0.0.0.0' });
-    console.info(`[ExecutionService] Listening on port ${PORT}`);
-    console.info(`[ExecutionService] Environment: ${NODE_ENV}`);
-    console.info(`[ExecutionService] JWT auth: enabled`);
+    app.log.info(`[ExecutionService] Listening on port ${PORT}`);
+    app.log.info(`[ExecutionService] Environment: ${NODE_ENV}`);
+    app.log.info(`[ExecutionService] JWT auth: enabled`);
   } catch (error: any) {
-    console.error('[ExecutionService] Failed to start:', error.message);
+    app.log.error({ error: error.message }, '[ExecutionService] Failed to start');
     process.exit(1);
   }
 }
@@ -1042,14 +1042,14 @@ start();
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
-  console.info('[ExecutionService] SIGTERM received, shutting down...');
+  app.log.info('[ExecutionService] SIGTERM received, shutting down...');
   await app.close();
   if (redis) await redis.quit();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
-  console.info('[ExecutionService] SIGINT received, shutting down...');
+  app.log.info('[ExecutionService] SIGINT received, shutting down...');
   await app.close();
   if (redis) await redis.quit();
   process.exit(0);

@@ -3,7 +3,6 @@
  *
  * Usage:
  *   ADMIN_EMAIL=custom@example.com ADMIN_PASSWORD=MyPass123! npx tsx prisma/seed.ts
- *   npx tsx prisma/seed.ts  (uses defaults)
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -12,7 +11,11 @@ import bcrypt from 'bcryptjs';
 const prisma = new PrismaClient();
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@aenews.net';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@AENEWS2026!';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+if (!ADMIN_PASSWORD) {
+  console.error('ADMIN_PASSWORD env var is required');
+  process.exit(1);
+}
 
 async function seed() {
   try {

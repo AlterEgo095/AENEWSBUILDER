@@ -51,8 +51,8 @@ const ProjectPreviewDashboard: React.FC<ProjectPreviewDashboardProps> = ({
           const htmlFile = fileList.find((f: any) => f.path?.endsWith('.html'));
           if (htmlFile) setSelectedFile(htmlFile.path);
         }
-      } catch (err) {
-        console.error('Failed to fetch files:', err);
+      } catch {
+        // Failed to fetch files - non-critical
       } finally {
         setIsLoading(false);
       }
@@ -75,8 +75,8 @@ const ProjectPreviewDashboard: React.FC<ProjectPreviewDashboardProps> = ({
         const text = await response.text();
         setFileContent(text);
       }
-    } catch (err) {
-      console.error('Failed to load file:', err);
+    } catch {
+      // Failed to load file - non-critical
       setFileContent('Erreur lors du chargement du fichier');
     }
   }, [projectId, token]);

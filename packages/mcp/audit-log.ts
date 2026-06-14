@@ -7,13 +7,27 @@ import IORedis from 'ioredis';
 import { logger } from './adapter.js';
 
 let auditRedis: IORedis | null = null;
+let redisAvailable = false;
 
 function getAuditRedis(): IORedis {
   if (!auditRedis) {
     const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
     auditRedis = new IORedis(redisUrl);
+    auditRedis.on('ready', () => { redisAvailable = true; });
+    auditRedis.on('error', () => { redisAvailable = false; });
   }
   return auditRedis;
+}
+
+// Initialize Redis connection and warn if unavailable
+try {
+  getAuditRedis();
+} catch {
+  logger.warn('Redis not available for audit logging - falling back to logger-only mode. ' +
+    'Audit entries will NOT be persisted until Redis is available.');
+  // TODO: Implement PostgreSQL or Elasticsearch persistence for audit logs
+  // to avoid data loss when Redis is unavailable. This requires a DB migration
+  // to create the audit_entries table and a write-through fallback strategy.
 }
 
 export interface AuditEntry {

@@ -196,9 +196,21 @@ class ApiClient {
   }
 
   // Costs
-  async getCosts(page = 1, limit = 20) {
-    const params = new URLSearchParams({ page: String(page), limit: String(limit) });
-    return this.get<PaginatedResponse<any>>(`/admin/costs?${params}`);
+  async getCosts(fromDate?: string, page?: number, limit?: number) {
+    const params = new URLSearchParams();
+    if (fromDate) params.set('from', fromDate);
+    if (page) params.set('page', String(page));
+    if (limit) params.set('limit', String(limit));
+    return this.get<any>(`/admin/costs?${params}`);
+  }
+
+  // Jobs - additional methods
+  async clearFailedJobs() {
+    return this.delete<ApiResponse<void>>('/admin/jobs/failed');
+  }
+
+  async getQueueStats() {
+    return this.get<any>('/admin/jobs/stats');
   }
 
   // MCP Tools

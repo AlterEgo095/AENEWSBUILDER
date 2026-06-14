@@ -248,19 +248,11 @@ export class PlanVersioningEngine {
    * is responsible for comparing versions within the same project.
    */
   async comparePlans(
+    projectId: string,
     versionA: number,
     versionB: number,
   ): Promise<PlanDiff> {
-    // We need at least one plan version to resolve the projectId.
-    // Try a best-effort lookup by scanning known patterns isn't feasible
-    // without a project context, so we expose a thin wrapper that requires
-    // callers to pass projectId. However the signature requested is
-    // `comparePlans(versionA, versionB)` so we'll document the limitation
-    // and return an empty diff when plans cannot be resolved.
-    throw new Error(
-      'comparePlans(versionA, versionB) requires a projectId context. ' +
-        'Use compareProjectPlans(projectId, versionA, versionB) instead.',
-    );
+    return this.compareProjectPlans(projectId, versionA, versionB);
   }
 
   /**

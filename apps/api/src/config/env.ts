@@ -63,7 +63,17 @@ const envSchema = z.object({
   OLLAMA_BASE_URL: z.string().default('http://localhost:11434/v1'),
   
   // CORS
-  CORS_ORIGINS: z.string().transform((str) => str.split(',').filter(Boolean)),
+  CORS_ORIGINS: z.string()
+    .transform((str) => str.split(',').filter(Boolean))
+    .refine(
+      (origins) => {
+        if (process.env.NODE_ENV === 'production' && origins.includes('*')) {
+          return false;
+        }
+        return true;
+      },
+      { message: "CORS_ORIGINS must not include '*' in production environment" }
+    ),
   FRONTEND_URL: z.string().url(),
   
   // Security

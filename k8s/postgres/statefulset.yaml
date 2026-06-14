@@ -119,4 +119,12 @@ spec:
         - name: postgres-data
           persistentVolumeClaim:
             claimName: postgres-data-postgres-0
-  volumeClaimTemplates: []
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi

@@ -12,11 +12,8 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.36.0",
-    "axios": "^1.7.2",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "zustand": "^4.5.2"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

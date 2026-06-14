@@ -123,7 +123,7 @@ export function AuthForm({ onLoginSuccess }: AuthFormProps) {
                   Remember me
                 </span>
               </label>
-              <button type="button" className="text-xs text-brand-light hover:text-brand transition-colors">
+              <button type="button" onClick={() => toast.info('Not implemented', 'Password reset is not yet available.')} className="text-xs text-brand-light hover:text-brand transition-colors">
                 Forgot password?
               </button>
             </div>

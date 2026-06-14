@@ -40,19 +40,11 @@ const QUEUE_NAME = 'project-generate';
 
 class ProjectGenerationQueue {
   private queue;
-  private worker;
 
   constructor() {
     this.queue = createQueue(QUEUE_NAME);
-    
-    this.worker = createWorker(
-      QUEUE_NAME,
-      async (job: Job<ProjectJobData>) => {
-        logger.info('Processing project job', { jobId: job.id, projectId: job.data.projectId });
-        // Actual processing is handled by the main worker engine
-        return { success: true, projectId: job.data.projectId };
-      }
-    );
+    // Worker processing is handled by the main worker engine in workers/index.ts
+    // No duplicate consumer is registered here to avoid conflicts
   }
 
   async addJob(data: ProjectJobData): Promise<string> {
